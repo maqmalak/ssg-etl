@@ -1,0 +1,60 @@
+services:
+  airflow-apiserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: ${AIRFLOW_UID}
+        HOST_GID: ${AIRFLOW_GID}
+    env_file:
+      - .env
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: ${AIRFLOW_UID}
+        HOST_GID: ${AIRFLOW_GID}
+    env_file:
+      - .env
+  airflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: ${AIRFLOW_UID}
+        HOST_GID: ${AIRFLOW_GID}
+    env_file:
+    - .env
+  airflow-triggerer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: ${AIRFLOW_UID}
+        HOST_GID: ${AIRFLOW_GID}
+    env_file:
+      - .env
+
+  postgres_grafana:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ssg
+    volumes:
+      - postgres-grafan-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+#  postgres:
+#    build:
+#      context: .
+#      dockerfile: postgres/Dockerfile
+#    command: ["postgres", "-c", "config_file=/usr/share/postgresql/14/postgresql.conf"]
+
+volumes:
+  postgres-grafan-db-volume:

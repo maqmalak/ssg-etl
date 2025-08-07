@@ -1,0 +1,16 @@
+dask
+duckdb
+distributed
+redis
+boto3
+psycopg2-binary
+apache-airflow-providers-amazon[s3fs]
+s3fs
+#apache-airflow[amazon]==2.10.5
+#apache-airflow[postgres]==2.10.5
+sqlalchemy-redshift
+#apache-airflow-providers-amazon==2.10.5
+apache-airflow-providers-redis
+#apache-airflow-providers-postgres[amazon]==2.10.5
+#apache-airflow-providers-common-sql
+asyncpg

@@ -1,0 +1,7 @@
+venv
+logs/*
+!logs/.gitignore
+dags/_pycache_/*
+_pycache_
+.vscode
+.idea

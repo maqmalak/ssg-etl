@@ -1,24 +1,18 @@
-import faker
-# import psycopg2
+from faker import Faker
 import random
-import uuid
-# from datetime import datetime
+import psycopg2
 from datetime import datetime, timedelta
+from airflow.decorators import dag, task
 
-# from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.decorators import  dag, task
+fake = Faker()
 
-
-fake = faker.Faker()
-
+# Function to generate a transaction
 def generate_transaction():
     user = fake.simple_profile()
-
     return {
-        "transactionId": fake.uuid4(),
+        "transactionId": str(fake.uuid4()),
         "userId": user['username'],
-        "timestamp": datetime.utcnow().timestamp(),
+        "timestamp": datetime.utcnow(),
         "amount": round(random.uniform(10, 1000), 2),
         "currency": random.choice(['USD', 'GBP']),
         'city': fake.city(),
@@ -27,67 +21,33 @@ def generate_transaction():
         "paymentMethod": random.choice(['credit_card', 'debit_card', 'online_transfer']),
         "ipAddress": fake.ipv4(),
         "voucherCode": random.choice(['', 'DISCOUNT10', '']),
-        'affiliateId': fake.uuid4()
+        'affiliateId': str(fake.uuid4())
     }
 
-transaction = generate_transaction()
-# print(transaction)
+# Function to create the transactions table
+def create_table(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transactions (
+            transaction_id VARCHAR(255) PRIMARY KEY,
+            user_id VARCHAR(255),
+            timestamp TIMESTAMP,
+            amount DECIMAL,
+            currency VARCHAR(255),
+            city VARCHAR(255),
+            country VARCHAR(255),
+            merchant_name VARCHAR(255),
+            payment_method VARCHAR(255),
+            ip_address VARCHAR(255),
+            voucher_code VARCHAR(255),
+            affiliateId VARCHAR(255)
+        )
+        """)
+    cursor.close()
+    conn.commit()
 
-
-# def create_table(conn):
-#     cursor = conn.cursor()
-
-#     cursor.execute(
-#         """
-#         CREATE TABLE IF NOT EXISTS transactions (
-#             transaction_id VARCHAR(255) PRIMARY KEY,
-#             user_id VARCHAR(255),
-#             timestamp TIMESTAMP,
-#             amount DECIMAL,
-#             currency VARCHAR(255),
-#             city VARCHAR(255),
-#             country VARCHAR(255),
-#             merchant_name VARCHAR(255),
-#             payment_method VARCHAR(255),
-#             ip_address VARCHAR(255),
-#             voucher_code VARCHAR(255),
-#             affiliateId VARCHAR(255)
-#         )
-#         """)
-
-#     cursor.close()
-#     conn.commit()
-
-# if __name__ == "__main__":
-#     conn = psycopg2.connect(
-#         host='localhost',
-#         database='ssg',
-#         user='postgres',
-#         password='postgres',
-#         port=5432
-#     )
-
-#     create_table(conn)
-
-#     transaction = generate_transaction()
-#     cur = conn.cursor()
-#     print(transaction)
-
-#     cur.execute(
-#         """
-#         INSERT INTO transactions(transaction_id, user_id, timestamp, amount, currency, city, country, merchant_name, payment_method, 
-#         ip_address, affiliateId, voucher_code)
-#         VALUES (%s, %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-#         """, (transaction["transactionId"], transaction["userId"], datetime.fromtimestamp(transaction["timestamp"]).strftime('%Y-%m-%d %H:%M:%S'),
-#               transaction["amount"], transaction["currency"], transaction["city"], transaction["country"],
-#               transaction["merchantName"], transaction["paymentMethod"], transaction["ipAddress"],
-#               transaction["affiliateId"], transaction["voucherCode"])
-#     )
-
-#     cur.close()
-#     conn.commit()
-
-
+# Airflow DAG definition
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
@@ -98,20 +58,68 @@ default_args = {
 }
 
 @dag(
-    'sales_data_etl',
+    dag_id='sales_data_etl',
     default_args=default_args,
-    schedule="0 * * * *",
+    schedule="0 * * * *",  # Run hourly
     tags=["ssg", "sales"],
     catchup=False,
 )
 def sales_data():
+    @task
+    def initialize_task():
+        # Generate a transaction
+        transaction = generate_transaction()
+        print(f"Generated transaction: {transaction}")
+        return transaction
 
-    @task()
-    def initailize_task():
-        print (f'{transaction}')
-        return 6
+    @task
+    def insert_transaction(transaction):
+        # Connect to PostgreSQL
+        conn = psycopg2.connect(
+            host='postgres_grafana',
+            database='ssg',
+            user='postgres',
+            password='postgres',
+            port=5432
+        )
+        try:
+            # Create table if it doesn't exist
+            create_table(conn)
+            # Insert transaction
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO transactions(transaction_id, user_id, timestamp, amount, currency, city, country, merchant_name, payment_method, 
+                ip_address, affiliateId, voucher_code)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    transaction["transactionId"],
+                    transaction["userId"],
+                    transaction["timestamp"],
+                    transaction["amount"],
+                    transaction["currency"],
+                    transaction["city"],
+                    transaction["country"],
+                    transaction["merchantName"],
+                    transaction["paymentMethod"],
+                    transaction["ipAddress"],
+                    transaction["affiliateId"],
+                    transaction["voucherCode"]
+                )
+            )
+            cur.close()
+            conn.commit()
+            print(f"Inserted transaction: {transaction['transactionId']}")
+        except Exception as e:
+            print(f"Error inserting transaction: {e}")
+            raise
+        finally:
+            conn.close()
 
-    initailize_task()
+    # Define task dependencies
+    transaction_data = initialize_task()
+    insert_transaction(transaction_data)
 
-
-sales_data()
+# Instantiate the DAG
+dag = sales_data()

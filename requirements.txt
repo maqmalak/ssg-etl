@@ -14,3 +14,4 @@ apache-airflow-providers-redis
 #apache-airflow-providers-postgres[amazon]==2.10.5
 #apache-airflow-providers-common-sql
 asyncpg
+faker

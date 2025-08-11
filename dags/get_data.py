@@ -60,7 +60,7 @@ default_args = {
 @dag(
     dag_id='sales_data_etl',
     default_args=default_args,
-    schedule="0 * * * *",  # Run hourly
+    schedule="*/5 * * * *",  # Run 1 minus
     tags=["ssg", "sales"],
     catchup=False,
 )

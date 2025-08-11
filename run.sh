@@ -4,6 +4,7 @@ set -e
 
 DETACH=true
 BUILD=false
+NO_CACHE=false
 
 # Parse CLI args
 for arg in "$@"
@@ -15,6 +16,10 @@ do
       ;;
     --build)
       BUILD=true
+      shift
+      ;;
+    --no-cache)
+      NO_CACHE=true
       shift
       ;;
     *)
@@ -33,7 +38,13 @@ fi
 # Build only if --build is passed
 if [ "$BUILD" = true ]; then
   echo "🔨 Building Airflow image..."
-  docker compose build
+  if [ "$NO_CACHE" = true ]; then
+    echo "⚠️ Building without cache..."
+    docker compose build --no-cache
+  else
+    echo "📦 Building with cache..."
+    docker compose build
+  fi
 else
   echo "📦 Using existing prebuilt image (no build)."
 fi

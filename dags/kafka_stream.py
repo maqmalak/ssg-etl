@@ -1,11 +1,9 @@
 import uuid
-# from datetime import datetime
 from datetime import datetime, timedelta
+import logging
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-# from airflow.decorators import dag, task
-
 
 default_args = {
     "owner": "airflow",
@@ -18,7 +16,6 @@ default_args = {
 
 def get_data():
     import requests
-
     res = requests.get("https://randomuser.me/api/")
     res = res.json()
     res = res['results'][0]
@@ -40,14 +37,12 @@ def format_data(res):
     data['registered_date'] = res['registered']['date']
     data['phone'] = res['phone']
     data['picture'] = res['picture']['medium']
-
     return data
 
 def stream_data():
     import json
     # from kafka import KafkaProducer
     import time
-    import logging
 
     logging.basicConfig(level=logging.INFO)  # Ensure logging is configured
     try:
@@ -60,49 +55,25 @@ def stream_data():
                 logging.info(f"Sending data: {res}")
                 print(f'data: {res}')
                 # producer.send('users_created', json.dumps(res).encode('utf-8'))
-                time.sleep(1)  # Add delay to avoid overwhelming the producer
+                time.sleep(1)  # Add delay to avoid rapid API calls and overwhelming the system
             except Exception as e:
                 logging.error(f'Error in loop: {e}')
         # producer.flush()  # Ensure all messages are sent
     except Exception as e:
         logging.error(f'Kafka connection error: {e}')
         raise
-    
-stream_data()
-# def stream_data():
-#     import json
-#     from kafka import KafkaProducer
-#     import time
-#     import logging
 
-#     producer = KafkaProducer(bootstrap_servers=['localhost:29092'], max_block_ms=10000)
-#     curr_time = time.time()
+with DAG('user_automation',
+         default_args=default_args,
+         schedule="1 * * * *",
+         tags=["ssg", "api-getdata"],
+         catchup=False) as dag:
 
-#     while True:
-#         if time.time() > curr_time + 60: #1 minute
-#             break
-#         try:
-#             res = get_data()
-#             res = format_data(res)
-#             logging.info(f"Sending data: {res}")
-#             producer.send('users_created', json.dumps(res).encode('utf-8'))
-#         except Exception as e:
-#             logging.error(f'An error occured: {e}')
-#             continue
+    streaming_task = PythonOperator(
+        task_id='stream_data_from_api',
+        python_callable=stream_data
+    )
 
-# if __name__ == "__main__":
-#     print("Running stream_data function for testing...")
-#     stream_data()
-
-
-# with DAG('user_automation',
-#          default_args=default_args,
-#         #  schedule_interval='@daily',
-#          schedule="0 * * * *",
-#          tags=["ssg", "api-getdata"],
-#          catchup=False) as dag:
-
-#     streaming_task = PythonOperator(
-#         task_id='stream_data_from_api',
-#         python_callable=stream_data
-#     )
+if __name__ == "__main__":
+    print("Running stream_data function for testing...")
+    stream_data()

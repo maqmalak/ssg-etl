@@ -1,4 +1,4 @@
-FROM apache/airflow:3.0.3
+FROM apache/airflow:2.11.0
 
 # Accept host UID and GID
 ARG HOST_UID=50000

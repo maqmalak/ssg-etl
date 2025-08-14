@@ -19,7 +19,7 @@ logger = logging.getLogger("airflow.task")
 class BaseModel(Base):
     __abstract__ = True
 
-    def __init__(self, connection_id = None, connection_type = 'postgres', **kwargs):
+    def __init__(self, connection_id = None, connection_type = 'mssql', **kwargs):
         super().__init__(**kwargs)
         self.connection = None
         self.engine = None
@@ -50,7 +50,7 @@ class BaseModel(Base):
         for attempt in range(max_retries):
             try:
                 if not self.sql_connection_id:
-                    self.sql_connection_id = 'postgres_grafana'
+                    self.sql_connection_id = 'TargetMSSQL'
 
                 self.connection = BaseHook.get_connection(self.sql_connection_id)
                 uri = self.connection.get_uri()

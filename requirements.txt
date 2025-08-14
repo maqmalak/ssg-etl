@@ -17,3 +17,4 @@ apache-airflow-providers-microsoft-mssql
 asyncpg
 faker
 pyodbc
+pandas

@@ -23,7 +23,7 @@ default_args = {
 }
 
 @dag(
-    dag_id='hanger_lane_etl',
+    dag_id='Test_hanger_lane',
     default_args=default_args,
     schedule_interval="0 * * * *",  # Every hour at minute 0
     tags=["ssg", "hanger"],

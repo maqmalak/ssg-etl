@@ -10,7 +10,7 @@ from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the functions from the DAG
-from dags.dynamic_db_etl import fetch_data_from_source, save_data_to_postgres
+from dags.dynamic_db_etl import fetch_data_from_source, save_data_to_target
 
 def test_fetch_function():
     """Test the fetch_data_from_source function"""
@@ -25,8 +25,8 @@ def test_fetch_function():
         return False
 
 def test_save_function():
-    """Test the save_data_to_postgres function"""
-    print("Testing save_data_to_postgres function...")
+    """Test the save_data_to_target function"""
+    print("Testing save_data_to_target function...")
     try:
         # This will fail because we don't have the actual database connections
         # But it will help us verify the syntax

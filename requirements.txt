@@ -6,15 +6,17 @@ boto3
 psycopg2-binary
 apache-airflow-providers-amazon[s3fs]
 s3fs
-#apache-airflow[amazon]==2.10.5
-#apache-airflow[postgres]==2.10.5
 sqlalchemy-redshift
-#apache-airflow-providers-amazon==2.10.5
 apache-airflow-providers-redis
-#apache-airflow-providers-postgres[amazon]==2.10.5
 apache-airflow-providers-common-sql
 apache-airflow-providers-microsoft-mssql
 asyncpg
 faker
 pyodbc
 pandas
+pendulum
+sqlalchemy
+pyspark==3.5.0
+
+# Additional dependencies for Spark
+py4j

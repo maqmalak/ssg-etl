@@ -36,14 +36,14 @@ services:
     env_file:
       - .env
 
-  postgres_grafana:
+  pg_warehouse:
     image: postgres:16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ssg
     ports:
-      - "5445:5432"
+      - "5455:5432"
 
     volumes:
       - postgres-grafan-db-volume:/var/lib/postgresql/data

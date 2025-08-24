@@ -22,6 +22,7 @@ RUN apt-get update && \
         freetds-dev \
         libsybdb5 \
         libct4 \
+        openjdk-17-jre \
         tdsodbc && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -59,4 +60,7 @@ USER airflow
 # Copy and install Python dependencies
 COPY requirements.txt /opt/airflow/
 ENV PYTHONPATH=/opt/airflow/scripts:$PYTHONPATH
-RUN pip install --no-cache-dir -r /opt/airflow/requirements.txt
+
+# Upgrade pip and install dependencies with retry options
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir --timeout 1000 --retries 10 -r /opt/airflow/requirements.txt

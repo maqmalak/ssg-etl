@@ -96,7 +96,7 @@ def transform_srcProduct():
     revised.to_sql(f'stg_DimProduct', engine, if_exists='replace', index=False)
     return {"table(s) processed ": "Data imported successful"}
 
-#
+# for testing
 # @task()
 def transform_srcProductSubcategory():
     conn = BaseHook.get_connection('postgres')

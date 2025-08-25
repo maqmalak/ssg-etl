@@ -16,7 +16,10 @@ pyodbc
 pandas
 pendulum
 sqlalchemy
-pyspark==3.5.0
-
+cx-Oracle==8.3.0
+pymssql==2.3.1
+PyMySQL==1.0.2
+mysql-connector-python==8.1.0
 # Additional dependencies for Spark
+pyspark==3.5.0
 py4j

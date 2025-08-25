@@ -27,9 +27,9 @@ RUN apt-get update && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Download and install Microsoft ODBC Driver 17 for SQL Server directly
-RUN curl -sSL https://packages.microsoft.com/debian/12/prod/pool/main/m/msodbcsql17/msodbcsql17_17.10.5.1-1_amd64.deb -o msodbcsql17.deb && \
-    ACCEPT_EULA=Y dpkg -i msodbcsql17.deb && \
-    rm msodbcsql17.deb
+#RUN curl -sSL https://packages.microsoft.com/debian/12/prod/pool/main/m/msodbcsql17/msodbcsql17_17.10.5.1-1_amd64.deb -o msodbcsql17.deb && \
+#   ACCEPT_EULA=Y dpkg -i msodbcsql17.deb && \
+#   rm msodbcsql17.deb
 
 # Install system build dependencies
 RUN apt-get update && \

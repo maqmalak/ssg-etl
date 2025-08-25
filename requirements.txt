@@ -20,6 +20,6 @@ cx-Oracle==8.3.0
 pymssql==2.3.1
 PyMySQL==1.0.2
 mysql-connector-python==8.1.0
-# Additional dependencies for Spark
+# Additional dependencies for Spark integration
 pyspark==3.5.0
 py4j

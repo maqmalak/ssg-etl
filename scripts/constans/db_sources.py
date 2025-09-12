@@ -1,7 +1,7 @@
 
 DATA_SOURCES_NAMES=[
-    'SOURCE_DB1',
-    # 'SOURCE_DB2'
+    'postgres_grafana',
+    # 'SOURCE_DB'
 
 ]
 

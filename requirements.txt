@@ -10,6 +10,8 @@ sqlalchemy-redshift
 apache-airflow-providers-redis
 apache-airflow-providers-common-sql
 apache-airflow-providers-microsoft-mssql
+apache-airflow-providers-postgres
+apache-airflow-providers-mysql
 asyncpg
 faker
 pyodbc

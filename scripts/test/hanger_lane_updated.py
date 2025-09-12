@@ -30,7 +30,6 @@ from dags.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
     create_table_if_not_exists,
-    
 )
 
 # Import functions from hanger_line_transform.py
@@ -42,7 +41,6 @@ try:
     print("Successfully imported functions from hanger_line_transform.py")
 except ImportError as e:
     print(f"Error importing functions from hanger_line_transform.py: {e}")
-
 
 from scripts.constans.db_sources import SOURCE_HANGER_LANE
 
@@ -127,7 +125,7 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
         with engine.connect() as conn:
             result = conn.execute(
                 text(
-                    "SELECT MAX(lastextractdatetime) FROM etl_extract_log WHERE source_connection = :src"
+                    "SELECT MAX(lastextractdatetime) FROM etl_extract_log WHERE source_connection = :src and status='Completed' "
                 ),
                 {"src": source_connection},
             ).scalar()
@@ -303,45 +301,45 @@ def fetch_data_from_source(connection_id: str):
             ,[ODP_Current_Station]
             ,[ODP_Lump_Sum_Payment]
             ,[ODP_Make_Up_Pay_Rate]
-            ,[ODP_Last_Hanger_Start_Time],
-            [ODPD_Key],
-            [ODPD_Workstation],
-            [ODPD_WC_Key],
-            [ODPD_Quantity],
-            [ODPD_ST_Key],
-            [ST_ID],
-            [ST_Description],
-            [ODPD_Lot_Number],
-            [ODPD_OC_Key],
-            CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN 'Loading' 
+            ,[ODP_Last_Hanger_Start_Time]
+            ,[ODPD_Key]
+            ,[ODPD_Workstation]
+            ,[ODPD_WC_Key]
+            ,[ODPD_Quantity]
+            ,[ODPD_ST_Key]
+            ,[ST_ID]
+            ,[ST_Description]
+            ,[ODPD_Lot_Number]
+            ,[ODPD_OC_Key]
+            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN 'Loading' 
                 WHEN [OC_Description]='Pressing' THEN 'Un-Loading'
-            else [OC_Description] END AS OC_Description,
-            CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN ODPD_Quantity else 0 END AS Loading_Qty,
-            CASE WHEN [OC_Description]='Pressing' THEN ODPD_Quantity else 0 END AS UnLoading_Qty,
-            [OC_Piece_Rate],
-            [OC_Standard_Time],
-            [ODPD_Standard],
-            ODPD_Actual_Time,
-            [ODPD_PA_Key],
-            [ODPD_Pay_Rate],
-            [ODPD_Piece_Rate],
-            [ODPD_Start_Time],
-            [ODPD_CM_Key],
-            [CM_Description],
-            [ODPD_SM_Key],
-            [SM_Description],
-            [ODPD_Normal_Pay_Factor],
-            [ODPD_Is_Overtime],
-            [ODPD_Overtime_Factor],
-            [ODPD_Edited_By],
-            [ODPD_Edited_Date],
-            [ODPD_Actual_Time_From_Reader],
-            [ODPD_STPO_Key],
-            [created_at] as created_at
+            ELSE [OC_Description] END AS OC_Description
+            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN ODPD_Quantity ELSE 0 END AS Loading_Qty
+            ,CASE WHEN [OC_Description]='Pressing' THEN ODPD_Quantity ELSE 0 END AS UnLoading_Qty
+            ,[OC_Piece_Rate]
+            ,[OC_Standard_Time]
+            ,[ODPD_Standard]
+            ,ODPD_Actual_Time
+            ,[ODPD_PA_Key]
+            ,[ODPD_Pay_Rate]
+            ,[ODPD_Piece_Rate]
+            ,[ODPD_Start_Time]
+            ,[ODPD_CM_Key]
+            ,[CM_Description]
+            ,[ODPD_SM_Key]
+            ,[SM_Description]
+            ,[ODPD_Normal_Pay_Factor]
+            ,[ODPD_Is_Overtime]
+            ,[ODPD_Overtime_Factor]
+            ,[ODPD_Edited_By]
+            ,[ODPD_Edited_Date]
+            ,[ODPD_Actual_Time_From_Reader]
+            ,[ODPD_STPO_Key]
+            ,[created_at] AS created_at
         FROM [IHS].[dbo].[ODP_Detail] OD
         INNER JOIN [IHS].[dbo].[ODP_Master] OM ON OD.[ODPD_ODP_Key] = OM.[ODP_Key]  
-        INNER JOIN [IHS_SHARED].[dbo].[Employee_Master] EM   ON OM.[ODP_EM_Key]=EM.[EM_Key]
-        INNER JOIN [IHS_SHARED].[dbo].[Operation_Codes] OC   ON OD.[ODPD_OC_Key]=OC.[OC_Key]
+        INNER JOIN [IHS_SHARED].[dbo].[Employee_Master] EM ON OM.[ODP_EM_Key]=EM.[EM_Key]
+        INNER JOIN [IHS_SHARED].[dbo].[Operation_Codes] OC ON OD.[ODPD_OC_Key]=OC.[OC_Key]
         INNER JOIN [IHS_SHARED].[dbo].[Size_Master] SM ON OD.[ODPD_SM_Key]=SM.[SM_Key]
         INNER JOIN [IHS_SHARED].[dbo].[Colour_Master] CM ON OD.[ODPD_CM_Key]=CM.[CM_Key]
         INNER JOIN [IHS_SHARED].[dbo].[Style_Master] ST ON OD.[ODPD_ST_Key]=ST.[ST_Key]
@@ -469,7 +467,9 @@ def save_to_postgres(connection_id: str) -> str:
         session = Session()
         
         # Process data in streaming fashion
+        data_found = False
         for batch in fetch_data_from_source(connection_id):
+            data_found = True
             if batch:  # Only update last_extract_dt if we have data
                 # Get last extract datetime from current batch
                 batch_last_extract_dt = (
@@ -506,7 +506,7 @@ def save_to_postgres(connection_id: str) -> str:
         process_end_time = pendulum.now("Asia/Karachi")
         logger.info(f"[{connection_id}] Successfully saved {saved_count} transactions in {time.time() - start_time:.2f} seconds")
         
-        # Log successful completion
+        # Always log completion, even if no data was saved
         insert_etl_log(
             str(uuid.uuid4()),
             connection_id,
@@ -514,7 +514,7 @@ def save_to_postgres(connection_id: str) -> str:
             process_start_time,
             process_end_time,
             last_extract_dt,
-            True,
+            True,  # Mark as successful even if no data
             "Completed",
             None,
         )
@@ -542,6 +542,93 @@ def save_to_postgres(connection_id: str) -> str:
         engine.dispose()
         
     return f"Saved {saved_count} rows for {connection_id}"
+
+
+def transform() -> str:
+    """
+    Execute the hanger line data transformation using imported functions.
+    """
+    logger.info("Starting hanger line data transformation")
+    
+    try:
+        # Create Spark session
+        logger.info("Creating Spark session...")
+        spark = create_spark_session()
+        logger.info("Spark session created successfully")
+        
+        # Fetch data from PostgreSQL that was saved by the ETL process
+        logger.info("Fetching data from PostgreSQL...")
+        engine = get_postgres_engine()
+        
+        try:
+            # Try to get the last extract datetime from any source
+            # In a real implementation, you might want to check all sources
+            last_extract_dt = None
+            try:
+                from scripts.constans.db_sources import SOURCE_HANGER_LANE
+                if SOURCE_HANGER_LANE:
+                    last_extract_dt = get_last_extract_dt_from_log(SOURCE_HANGER_LANE[0])
+            except Exception as e:
+                logger.warning(f"Could not get last extract datetime: {e}")
+            
+            # Query to fetch data based on last extract time or last day
+            if last_extract_dt:
+                query = """
+                    SELECT *
+                    FROM operator_daily_performance
+                    WHERE created_at > %s
+                    ORDER BY created_at ASC;
+                """
+                params = [last_extract_dt]
+            else:
+                # Fallback to last day if no last extract datetime
+                query = """
+                    SELECT *
+                    FROM operator_daily_performance
+                    WHERE created_at >= NOW() - INTERVAL '1 day';
+                """
+                params = []
+            
+            with engine.connect() as conn:
+                if params:
+                    result = conn.execute(text(query), params)
+                else:
+                    result = conn.execute(text(query))
+                rows = result.fetchall()
+                
+                # Convert rows to list of dictionaries
+                columns = result.keys()
+                transactions = [dict(zip(columns, row)) for row in rows]
+                
+                logger.info(f"Fetched {len(transactions)} records from PostgreSQL")
+                
+                # If we have data, convert to Spark DataFrame and pass to transform_data
+                if transactions:
+                    # Convert to Spark DataFrame
+                    df = spark.createDataFrame(transactions)
+                    logger.info(f"Created Spark DataFrame with {df.count()} rows")
+                    
+                    # Execute transformation with the provided DataFrame
+                    logger.info("Executing data transformation with provided DataFrame...")
+                    success = transform_data(spark, df)
+                else:
+                    # No data to process, execute transformation without DataFrame
+                    # This will let sparkProcess.py load data as usual
+                    logger.info("No recent data found, executing transformation with default data loading...")
+                    success = transform_data(spark)
+        finally:
+            engine.dispose()
+        
+        if success:
+            logger.info("Data transformation completed successfully")
+            return "Transformation completed successfully"
+        else:
+            logger.warning("Data transformation completed with issues")
+            return "Transformation completed with issues"
+            
+    except Exception as e:
+        logger.error(f"Error during data transformation: {e}")
+        raise
 
 
 # DAG Definition
@@ -692,69 +779,45 @@ def dynamic_hanger_db_etl():
     
 
     @task
-
-    def transform(**context):
+    def transform_data_to_postgres(saved_results: List[str]) -> str:
         """
-        Execute the hanger line data transformation using imported functions.
+        Transform data after saving to PostgreSQL.
+        Only proceed if at least one extraction actually saved data.
+        
+        Args:
+            saved_results (List[str]): Results from save tasks
+            
+        Returns:
+            str: Status message
         """
-        logger.info("Starting hanger line data transformation")
+        logger.info("Checking if any data was actually saved before transforming...")
         
-        # Check if there's actually data to transform
-        from airflow.models import DagRun, TaskInstance
-        from airflow.utils.state import State
-        
-        # Get the current DAG run
-        dag_run = context['dag_run']
-        
-        # Find save tasks and check their status/results
-        save_task_instances = [
-            ti for ti in dag_run.get_task_instances()
-            if ti.task_id.startswith('save_') and not ti.task_id.endswith('_completion_status')
-        ]
-        
-        # Check if any save tasks actually saved data
+        # Check if any of the save tasks actually saved data
         any_data_saved = False
-        for ti in save_task_instances:
-            if ti.state == State.SUCCESS and ti.xcom_pull(task_ids=ti.task_id):
-                result = ti.xcom_pull(task_ids=ti.task_id)
-                if result and isinstance(result, str) and "Saved" in result and "records" in result:
-                    try:
-                        # Extract number of records saved
-                        parts = result.split()
-                        if len(parts) >= 2:
-                            record_count = int(parts[1])
-                            if record_count > 0:
-                                any_data_saved = True
-                                break
-                    except (ValueError, IndexError):
-                        # If we can't parse the record count, assume data was saved if task succeeded
+        total_records_saved = 0
+        
+        for result in saved_results:
+            if result and "Saved" in result and "rows for" in result:
+                # Extract the number of records saved
+                try:
+                    # Parse strings like "Saved 150 rows for connection_X"
+                    parts = result.split()
+                    if len(parts) >= 2:
+                        record_count = int(parts[1])
+                        if record_count > 0:
+                            any_data_saved = True
+                            total_records_saved += record_count
+                except (ValueError, IndexError):
+                    # If we can't parse the record count, assume data was saved if the task ran
+                    if "Saved" in result:
                         any_data_saved = True
-                        break
         
         if not any_data_saved:
             logger.info("No data was saved in upstream tasks. Skipping transformation.")
             return "Skipped - No new data to transform"
         
-        try:
-            # Create Spark session
-            logger.info("Creating Spark session...")
-            spark = create_spark_session()
-            logger.info("Spark session created successfully")
-            
-            # Execute transformation
-            logger.info("Executing data transformation...")
-            success = transform_data(spark)
-            
-            if success:
-                logger.info("Data transformation completed successfully")
-                return "Transformation completed successfully"
-            else:
-                logger.warning("Data transformation completed with issues")
-                return "Transformation completed with issues"
-                
-        except Exception as e:
-            logger.error(f"Error during data transformation: {e}")
-            raise
+        logger.info(f"Data was saved in upstream tasks ({total_records_saved} total records). Proceeding with transformation.")
+        return transform()
 
 
 
@@ -770,6 +833,8 @@ def dynamic_hanger_db_etl():
     
     # Create tasks for each data source
     save_tasks = []
+    transform_trigger_tasks = []
+    
     for conn_id in SOURCE_HANGER_LANE:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
@@ -792,38 +857,22 @@ def dynamic_hanger_db_etl():
         extract >> Label("Save results") >> save
         save >> skip  # Both save and skip go to end
         skip >> end
-    
-    # Add a check task to determine if any data was actually saved
-    @task(trigger_rule="all_done")
-    def check_if_any_data_saved(saved_results):
-        """Check if any save tasks actually saved data"""
-        logger.info(f"Checking saved results: {saved_results}")
-        # If any save task returned a result indicating data was saved
-        any_data_saved = any(result and "Saved" in str(result) and "records" in str(result) for result in saved_results)
-        logger.info(f"Any data saved: {any_data_saved}")
-        return "proceed_to_transform" if any_data_saved else "skip_transform"
-    
-    # Add a dummy task for skipping transform
-    skip_transform = EmptyOperator(task_id="skip_transform")
-    
-    # Add a branch task to decide whether to run transform
-    check_saved_data = check_if_any_data_saved.expand(saved_results=save_tasks)
-    
-    # Add transform task with proper trigger rule
-    transform_task = transform.override(
-        task_id="transform",
-        trigger_rule="none_failed_min_one_success"
-    )()
-    
-    # Connect the tasks properly
-    if save_tasks:
-        for save_task in save_tasks:
-            save_task >> check_saved_data
         
-        check_saved_data >> Label("Data saved") >> transform_task >> end
-        check_saved_data >> Label("No data saved") >> skip_transform >> end
-    else:
-        start >> transform_task >> end
+        # Create a trigger task for each save task that will trigger the transform
+        # This allows the transform to run as soon as ANY save task completes successfully
+        trigger_transform = EmptyOperator(task_id=f"trigger_transform_{conn_id}")
+        save >> trigger_transform
+    
+    # Add a single transform task that can be triggered by any save task
+    transform_task = transform_data_to_postgres.override(task_id="transform")(save_tasks)
+    
+    # Connect transform task to run after any save task completes
+    # We'll connect it through the trigger tasks
+    for conn_id in SOURCE_HANGER_LANE:
+        trigger_task = EmptyOperator(task_id=f"trigger_transform_{conn_id}")
+        trigger_task >> transform_task
+    
+    transform_task >> end
     
     return dynamic_hanger_db_etl
 

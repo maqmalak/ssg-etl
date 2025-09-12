@@ -56,7 +56,7 @@ def check_for_data(**context):
     
     try:
         # Get connection parameters from environment variables
-        host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+        host = os.getenv("POSTGRES_HOST", "postgres_grafana")
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set environment variables for local testing
-export POSTGRES_HOST=172.16.7.6
+export POSTGRES_HOST=postgres_grafana
 export POSTGRES_PORT=5432
 export POSTGRES_DB=ssg
 export POSTGRES_USER=postgres

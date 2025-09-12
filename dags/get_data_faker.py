@@ -76,10 +76,10 @@ def sales_data():
     def insert_transaction(transaction):
         # Connect to PostgreSQL
         conn = psycopg2.connect(
-            host='postgres_grafana',
+            host='pg-ssg',
             database='ssg',
             user='postgres',
-            password='postgres',
+            password='P@kistan12',
             port=5432
         )
         try:

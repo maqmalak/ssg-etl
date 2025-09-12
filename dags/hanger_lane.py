@@ -12,7 +12,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
 import subprocess
+import sys
 import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 import pendulum
 import pyodbc
@@ -43,10 +45,6 @@ except ImportError as e:
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from scripts.constans.db_sources import SOURCE_HANGER_LANE
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
 from create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,

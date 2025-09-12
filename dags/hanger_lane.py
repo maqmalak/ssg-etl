@@ -711,43 +711,9 @@ def dynamic_hanger_db_etl():
             spark = create_spark_session()
             logger.info("Spark session created successfully")
             
-            # Fetch data from PostgreSQL that was saved by the ETL process
-            logger.info("Fetching data from PostgreSQL...")
-            engine = get_postgres_engine()
-            try:
-                # Query to fetch data from the last day
-                query = """
-                    SELECT *
-                    FROM operator_daily_performance
-                    WHERE created_at >= NOW() - INTERVAL '1 day'
-                """
-                
-                with engine.connect() as conn:
-                    result = conn.execute(text(query))
-                    rows = result.fetchall()
-                    
-                    # Convert rows to list of dictionaries
-                    columns = result.keys()
-                    transactions = [dict(zip(columns, row)) for row in rows]
-                    
-                    logger.info(f"Fetched {len(transactions)} records from PostgreSQL")
-                    
-                    # If we have data, convert to Spark DataFrame and pass to transform_data
-                    if transactions:
-                        # Convert to Spark DataFrame
-                        df = spark.createDataFrame(transactions)
-                        logger.info(f"Created Spark DataFrame with {df.count()} rows")
-                        
-                        # Execute transformation with the provided DataFrame
-                        logger.info("Executing data transformation with provided DataFrame...")
-                        success = transform_data(spark, df)
-                    else:
-                        # No data to process, execute transformation without DataFrame
-                        # This will let sparkProcess.py load data as usual
-                        logger.info("No recent data found, executing transformation with default data loading...")
-                        success = transform_data(spark)
-            finally:
-                engine.dispose()
+            # Execute transformation
+            logger.info("Executing data transformation...")
+            success = transform_data(spark)
             
             if success:
                 logger.info("Data transformation completed successfully")

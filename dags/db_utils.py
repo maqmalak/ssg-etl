@@ -13,7 +13,7 @@ from airflow.hooks.base import BaseHook
 from sqlalchemy import create_engine
 
 
-def get_postgres_connection_params(connection_id: str = "postgres_grafana") -> Dict[str, Any]:
+def get_postgres_connection_params(connection_id: str = "pg-ssg") -> Dict[str, Any]:
     """
     Get PostgreSQL connection parameters that can be used by Spark.
     
@@ -41,7 +41,7 @@ def get_postgres_connection_params(connection_id: str = "postgres_grafana") -> D
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "postgres")
+        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
     
     return {
         "host": host,

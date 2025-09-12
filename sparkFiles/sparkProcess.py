@@ -24,7 +24,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from db_utils import (
+    from dags.db_utils import (
         get_postgres_connection_params, 
         get_postgres_jdbc_properties
     )
@@ -191,8 +191,8 @@ def transform_data(spark, df=None):
 
                 # Filter the data to only include records from the last day
                 # We'll do this after loading to avoid SQL dialect issues
-                from pyspark.sql.functions import current_date, date_sub
-                df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
+                # from pyspark.sql.functions import current_date, date_sub
+                # df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
                 
                 print(f"Data loaded and filtered successfully. Row count: {df.count()}")
             except Exception as e:
@@ -209,8 +209,8 @@ def transform_data(spark, df=None):
                         .load()
                     
                     # Filter the data to only include records from the last day
-                    from pyspark.sql.functions import current_date, date_sub
-                    df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
+                    # from pyspark.sql.functions import current_date, date_sub
+                    # df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
                     
                     print(f"Data loaded and filtered successfully without explicit driver. Row count: {df.count()}")
                 except Exception as retry_e:
@@ -235,7 +235,7 @@ def transform_data(spark, df=None):
         # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
         print("Performing aggregation 1...")
         try:
-            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description") \
+            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description","source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 1: {str(e)}")
@@ -245,7 +245,7 @@ def transform_data(spark, df=None):
         print("Performing aggregation 2...")
         try:
             aggregated_df2 = df.groupBy("ODP_Date", "Shift") \
-                .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
+                .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity","source_connection"))
         except Exception as e:
             print(f"Error in aggregation 2: {str(e)}")
             return False
@@ -253,7 +253,7 @@ def transform_data(spark, df=None):
         # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
         print("Performing aggregation 3...")
         try:
-            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName") \
+            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName","source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 3: {str(e)}")

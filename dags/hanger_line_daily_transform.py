@@ -20,11 +20,9 @@ sys.path.append(os.path.abspath(scripts_path))
 
 # Import functions from hanger_line_transform.py
 try:
-    from hanger_line_transform import (
-        get_connection_params_fallback,
+    from sparkFiles.hangerline_transform import (
         create_spark_session,
-        transform_data,
-        save_with_update_insert
+        transform_data
     )
     print("Successfully imported functions from hanger_line_transform.py")
 except ImportError as e:
@@ -60,7 +58,7 @@ def check_for_data(**context):
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "postgres")
+        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
         
         logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
         

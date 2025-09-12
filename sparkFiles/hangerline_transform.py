@@ -122,7 +122,7 @@ def get_connection_params_fallback():
     port = os.getenv("POSTGRES_PORT", "5432")
     database = os.getenv("POSTGRES_DB", "ssg")
     user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
     
     print(f"Using connection parameters from environment variables:")
     print(f"  Host: {host}")
@@ -149,7 +149,7 @@ def transform_data(spark):
         
         # Use db_utils.py to get connection parameters with fallback
         try:
-            postgres_connection_params = get_postgres_connection_params("postgres_grafana")
+            postgres_connection_params = get_postgres_connection_params("pg-ssg")
         except Exception as e:
             print(f"Error getting connection params from db_utils: {e}")
             print("Using fallback method with environment variables...")
@@ -248,7 +248,7 @@ def transform_data(spark):
         # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
         print("Performing aggregation 1...")
         try:
-            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description") \
+            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description","source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 1: {str(e)}")
@@ -257,7 +257,7 @@ def transform_data(spark):
         # Transform 2: Group by ODP_Date and Shift, sum ODPD_Quantity
         print("Performing aggregation 2...")
         try:
-            aggregated_df2 = df.groupBy("ODP_Date", "Shift") \
+            aggregated_df2 = df.groupBy("ODP_Date", "Shift","source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 2: {str(e)}")
@@ -266,7 +266,7 @@ def transform_data(spark):
         # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
         print("Performing aggregation 3...")
         try:
-            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName") \
+            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName","source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 3: {str(e)}")

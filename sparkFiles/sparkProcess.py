@@ -231,16 +231,6 @@ def transform_data(spark, df=None):
         if row_count == 0:
             print("Warning: No data found in operator_daily_performance table")
             return True
-
-        try:
-            row_count = df.count()
-        except Exception as e:
-            print(f"Error counting rows: {str(e)}")
-            row_count = 0
-            
-        if row_count == 0:
-            print("Warning: No data found in operator_daily_performance table")
-            return True
             
         # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
         print("Performing aggregation 1...")

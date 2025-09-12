@@ -29,8 +29,7 @@ from sqlalchemy.orm import sessionmaker
 from dags.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
-    create_table_if_not_exists,
-    
+    create_table_if_not_exists
 )
 
 # Import functions from hanger_line_transform.py
@@ -65,7 +64,7 @@ def get_postgres_engine():
     Returns:
         sqlalchemy.engine.Engine: PostgreSQL engine instance
     """
-    connection = BaseHook.get_connection("postgres_grafana")
+    connection = BaseHook.get_connection("pg-ssg")
     uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     # Use connection pooling for better performance
     engine = create_engine(
@@ -303,7 +302,7 @@ def fetch_data_from_source(connection_id: str):
             ,[ODP_Current_Station]
             ,[ODP_Lump_Sum_Payment]
             ,[ODP_Make_Up_Pay_Rate]
-            ,[ODP_Last_Hanger_Start_Time],
+            ,[ODP_Last_Hanger_Start_Time]
             [ODPD_Key],
             [ODPD_Workstation],
             [ODPD_WC_Key],
@@ -788,7 +787,7 @@ def dynamic_hanger_db_etl():
         decide >> Label("Has new data") >> extract
         decide >> Label("No new data") >> skip
         extract >> Label("Save results") >> save
-        save >> skip  # Both save and skip go to end
+        save >> end
         skip >> end
     
     # Add a single transform task that runs after all saves are complete

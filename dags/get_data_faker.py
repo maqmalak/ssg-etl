@@ -76,7 +76,7 @@ def sales_data():
     def insert_transaction(transaction):
         # Connect to PostgreSQL
         conn = psycopg2.connect(
-            host='pg-ssg',
+            host='172.16.7.6',
             database='ssg',
             user='postgres',
             password='P@kistan12',

@@ -26,11 +26,7 @@ from pendulum import timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from dags.create_target_pg_hl_table import (
-    HangerLaneData,
-    create_etl_log_table_if_not_exists,
-    create_table_if_not_exists
-)
+
 
 # Import functions from hanger_line_transform.py
 try:
@@ -43,7 +39,20 @@ except ImportError as e:
     print(f"Error importing functions from hanger_line_transform.py: {e}")
 
 
+# Add the project root to the Python path for script imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 from scripts.constans.db_sources import SOURCE_HANGER_LANE
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from create_target_pg_hl_table import (
+    HangerLaneData,
+    create_etl_log_table_if_not_exists,
+    create_table_if_not_exists
+)
+
 
 # Configure logging
 logger = logging.getLogger(__name__)

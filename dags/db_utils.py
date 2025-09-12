@@ -61,7 +61,7 @@ def detect_database_host() -> str:
         str: The appropriate database host
     """
     # Check if we're in a Docker environment by trying to resolve common Docker service names
-    docker_hosts = ["postgres", "postgres_grafana", "database"]
+    docker_hosts = ["postgres", "pg-ssg", "database"]
     
     for host in docker_hosts:
         try:

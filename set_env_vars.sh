@@ -5,7 +5,7 @@ export POSTGRES_HOST=172.16.7.6
 export POSTGRES_PORT=5432
 export POSTGRES_DB=ssg
 export POSTGRES_USER=postgres
-export POSTGRES_PASSWORD=postgres
+export POSTGRES_PASSWORD=P@akistan12
 
 echo "Environment variables set for local testing:"
 echo "POSTGRES_HOST: $POSTGRES_HOST"

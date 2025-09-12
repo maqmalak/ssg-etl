@@ -122,7 +122,7 @@ def get_connection_params_fallback():
     port = os.getenv("POSTGRES_PORT", "5432")
     database = os.getenv("POSTGRES_DB", "ssg")
     user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "P@akistan12")
     
     print(f"Using connection parameters from environment variables:")
     print(f"  Host: {host}")

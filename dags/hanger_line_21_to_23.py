@@ -181,7 +181,7 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
         with engine.connect() as conn:
             result = conn.execute(
                 text(
-                    "SELECT MAX(lastextractdatetime) FROM etl_extract_log WHERE source_connection = :src"
+                    "SELECT MAX(lastextractdatetime) FROM etl_extract_log WHERE status='Completed' and source_connection = :src"
                 ),
                 {"src": source_connection},
             ).scalar()

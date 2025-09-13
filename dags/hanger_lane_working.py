@@ -108,16 +108,54 @@ def get_postgres_engine():
         # Properly encode the password to handle special characters like '@'
         from urllib.parse import quote_plus
         password = quote_plus(connection.password) if connection.password else ''
-        uri = f"postgresql://{connection.login}:{password}@{connection.host}:{connection.port}/{connection.schema}"
-        logger.info(f"Using Airflow connection: {connection.host}:{connection.port}/{connection.schema}")
+        
+        # Check if the host is localhost and potentially incorrect
+        host = connection.host
+        if host == "127.16.7.6" or host == "localhost" or host == "127.0.0.1":
+            logger.warning(f"Airflow connection host '{host}' appears to be localhost. Checking for better alternatives...")
+            # Try to detect the correct database host
+            import socket
+            # Check common database hosts
+            possible_hosts = ["172.16.7.6", "postgres", "database", "pg-ssg"]
+            for possible_host in possible_hosts:
+                try:
+                    socket.gethostbyname(possible_host)
+                    logger.info(f"Found accessible database host: {possible_host}")
+                    host = possible_host
+                    break
+                except socket.gaierror:
+                    continue
+            else:
+                logger.warning("Could not find an alternative database host, using Airflow connection as-is")
+        
+        uri = f"postgresql://{connection.login}:{password}@{host}:{connection.port}/{connection.schema}"
+        logger.info(f"Using Airflow connection: {host}:{connection.port}/{connection.schema}")
     except Exception as e:
         logger.warning(f"Could not get pg-ssg connection, using default values: {e}")
         # Fallback to default values for testing
         # Properly encode the password to handle special characters like '@'
         from urllib.parse import quote_plus
         password = quote_plus("P@akistan12")
-        uri = f"postgresql://postgres:{password}@172.16.7.6:5432/ssg"
-        logger.info("Using fallback connection: 172.16.7.6:5432/ssg")
+        
+        # Try to detect the correct database host
+        host = "172.16.7.6"  # Default fallback
+        try:
+            import socket
+            # Check common database hosts
+            possible_hosts = ["172.16.7.6", "postgres", "database", "pg-ssg"]
+            for possible_host in possible_hosts:
+                try:
+                    socket.gethostbyname(possible_host)
+                    logger.info(f"Found accessible database host: {possible_host}")
+                    host = possible_host
+                    break
+                except socket.gaierror:
+                    continue
+        except:
+            pass  # Use default host if detection fails
+            
+        uri = f"postgresql://postgres:{password}@{host}:5432/ssg"
+        logger.info(f"Using fallback connection: {host}:5432/ssg")
     
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(

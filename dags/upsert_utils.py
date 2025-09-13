@@ -27,11 +27,11 @@ def upsert_data_via_postgres(
     try:
         # Create connection
         conn = psycopg2.connect(
-            host=connection_params.get("host", "postgres_grafana"),
+            host=connection_params.get("host", "pg-ssg"),
             port=connection_params.get("port", "5432"),
             database=connection_params.get("database", "ssg"),
             user=connection_params.get("user", "postgres"),
-            password=connection_params.get("password", "postgres")
+            password=connection_params.get("password", "P@kistan12")
         )
         cursor = conn.cursor()
         
@@ -99,7 +99,7 @@ def upsert_data_via_postgres(
         return False
 
 
-def create_connection_params_from_airflow(connection_id: str = "postgres_grafana") -> Dict[str, str]:
+def create_connection_params_from_airflow(connection_id: str = "pg-ssg") -> Dict[str, str]:
     """
     Create connection parameters from Airflow connection.
     This function is meant to be used in an Airflow environment.
@@ -125,9 +125,9 @@ def create_connection_params_from_airflow(connection_id: str = "postgres_grafana
         print(f"Error getting Airflow connection: {str(e)}")
         # Return default values
         return {
-            "host": "postgres_grafana",
+            "host": "pg-ssg",
             "port": "5432",
             "database": "ssg",
             "user": "postgres",
-            "password": "postgres"
+            "password": "P@kistan12"
         }

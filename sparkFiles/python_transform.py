@@ -1,6 +1,6 @@
 """
 Python-based ETL script for transforming hanger lane data.
-This script reads data from the postgres_grafana database, performs aggregation, and saves the result.
+This script reads data from the pg-ssg database, performs aggregation, and saves the result.
 """
 
 import sys
@@ -29,7 +29,7 @@ def get_db_connection():
     """Create and return a database connection"""
     try:
         # Get connection parameters
-        connection_params = get_postgres_connection_params("postgres_grafana")
+        connection_params = get_postgres_connection_params("pg-ssg")
         
         # Create connection string
         uri = f"postgresql://{connection_params['user']}:{connection_params['password']}@{connection_params['host']}:{connection_params['port']}/{connection_params['database']}"
@@ -54,7 +54,7 @@ def transform_data():
         # Get database connection
         connection, engine = get_db_connection()
         
-        # Read data from postgres_grafana database
+        # Read data from pg-ssg database
         logger.info("Reading data from PostgreSQL...")
         query = "SELECT * FROM operator_daily_performance"
         df = pd.read_sql(query, connection)

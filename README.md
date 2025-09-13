@@ -28,7 +28,7 @@ python3 scripts/create_general_ledger_table.py
 
 ### 2. Airflow Connections
 Make sure you have configured the following connections in Airflow:
-- `postgres_grafana` - Connection to the target PostgreSQL database
+- `pg-ssg` - Connection to the target PostgreSQL database
 - `ssg-finance-1` - Connection to the first source SQL Server database
 - `ssg-finance-2` - Connection to the second source SQL Server database
 

@@ -1,6 +1,6 @@
 """
 PySpark ETL script for transforming hanger lane data.
-This script reads data from the postgres_grafana database, performs aggregation, and saves the result.
+This script reads data from the pg-ssg database, performs aggregation, and saves the result.
 """
 
 import sys

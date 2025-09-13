@@ -17,7 +17,7 @@ try:
     # Get connection parameters
     from db_utils import get_postgres_connection_params
     
-    params = get_postgres_connection_params("postgres_grafana")
+    params = get_postgres_connection_params("pg-ssg")
     
     print(f"Attempting to connect to PostgreSQL at {params['host']}:{params['port']}")
     

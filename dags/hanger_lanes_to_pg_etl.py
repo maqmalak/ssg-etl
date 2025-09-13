@@ -25,7 +25,7 @@ Base = declarative_base()
 def get_postgres_engine():
     """Create SQLAlchemy engine for destination PostgreSQL database"""
     # Get the connection details from Airflow
-    connection = BaseHook.get_connection('postgres_grafana')
+    connection = BaseHook.get_connection('pg-ssg')
     uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     return create_engine(uri)
 

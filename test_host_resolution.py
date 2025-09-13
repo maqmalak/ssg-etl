@@ -8,7 +8,7 @@ import os
 
 def test_host_resolution():
     """Test resolving different database hostnames"""
-    hosts_to_test = ["postgres", "postgres_grafana", "localhost", "127.0.0.1", "172.16.7.6"]
+    hosts_to_test = ["postgres", "pg-ssg", "localhost", "127.0.0.1", "172.16.7.6"]
     
     for host in hosts_to_test:
         try:

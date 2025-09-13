@@ -65,7 +65,7 @@ def get_postgres_engine():
     Returns:
         sqlalchemy.engine.Engine: PostgreSQL engine instance
     """
-    connection = BaseHook.get_connection("postgres_grafana")
+    connection = BaseHook.get_connection("pg-ssg")
     uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     # Use connection pooling for better performance
     engine = create_engine(

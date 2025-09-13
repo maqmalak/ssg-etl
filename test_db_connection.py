@@ -19,7 +19,7 @@ try:
     
     # Test getting connection parameters
     print("Testing database connection parameters...")
-    params = get_postgres_connection_params("postgres_grafana")
+    params = get_postgres_connection_params("pg-ssg")
     
     print(f"Host: {params['host']}")
     print(f"Port: {params['port']}")

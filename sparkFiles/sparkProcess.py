@@ -1,6 +1,6 @@
 """
 PySpark ETL script for transforming hanger lane data.
-This script reads data from the postgres_grafana database, performs aggregation, and saves the result.
+This script reads data from the pg-ssg database, performs aggregation, and saves the result.
 """
 
 import sys
@@ -153,7 +153,7 @@ def transform_data(spark, df=None):
             
             # Use db_utils.py to get connection parameters with fallback
             try:
-                postgres_connection_params = get_postgres_connection_params("postgres_grafana")
+                postgres_connection_params = get_postgres_connection_params("pg-ssg")
             except Exception as e:
                 print(f"Error getting connection params from db_utils: {e}")
                 print("Using fallback method with environment variables...")

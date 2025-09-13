@@ -128,11 +128,11 @@ services:
   # Airflow services
   airflow-apiserver:
     <<: *airflow-common
-    command: api-server
+    command: webserver
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "airflow config list | grep -q 'api'"]
+      test: ["CMD-SHELL", "airflow config list | grep -q 'webserver'"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -58,7 +58,7 @@ def check_for_data(**context):
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
+        password = os.getenv("POSTGRES_PASSWORD", "P@akistan12")
         
         logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
         

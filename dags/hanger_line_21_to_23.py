@@ -105,12 +105,19 @@ def get_postgres_engine():
     """
     try:
         connection = BaseHook.get_connection("pg-ssg")
-        uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
+        # Properly encode the password to handle special characters like '@'
+        from urllib.parse import quote_plus
+        password = quote_plus(connection.password) if connection.password else ''
+        uri = f"postgresql://{connection.login}:{password}@{connection.host}:{connection.port}/{connection.schema}"
+        logger.info(f"Using Airflow connection: {connection.host}:{connection.port}/{connection.schema}")
     except Exception as e:
-        connection = BaseHook.get_connection("pg-ssg")
         logger.warning(f"Could not get pg-ssg connection, using default values: {e}")
         # Fallback to default values for testing
-        uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
+        # Properly encode the password to handle special characters like '@'
+        from urllib.parse import quote_plus
+        password = quote_plus("P@akistan12")
+        uri = f"postgresql://postgres:{password}@172.16.7.6:5432/ssg"
+        logger.info("Using fallback connection: 172.16.7.6:5432/ssg")
     
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(

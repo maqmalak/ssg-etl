@@ -31,7 +31,7 @@ def upsert_data_via_postgres(
             port=connection_params.get("port", "5432"),
             database=connection_params.get("database", "ssg"),
             user=connection_params.get("user", "postgres"),
-            password=connection_params.get("password", "P@kistan12")
+            password=connection_params.get("password", "P@akistan12")
         )
         cursor = conn.cursor()
         

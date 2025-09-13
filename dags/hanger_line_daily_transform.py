@@ -13,6 +13,7 @@ import psycopg2
 import os
 import logging
 import sys
+from airflow.hooks.base import BaseHook
 
 # Add the scripts directory to the Python path
 scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
@@ -53,12 +54,43 @@ def check_for_data(**context):
     logger.info("Starting check_for_data task")
     
     try:
-        # Get connection parameters from environment variables
-        host = os.getenv("POSTGRES_HOST", "172.16.7.6")
-        port = os.getenv("POSTGRES_PORT", "5432")
-        database = os.getenv("POSTGRES_DB", "ssg")
-        user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "P@akistan12")
+        # Get connection parameters from Airflow connection
+        try:
+            connection = BaseHook.get_connection("pg-ssg")
+            host = connection.host
+            port = connection.port if connection.port else 5432
+            database = connection.schema
+            user = connection.login
+            password = connection.password
+            
+            logger.info(f"Using Airflow connection 'pg-ssg':")
+            logger.info(f"  Host: {host}")
+            logger.info(f"  Port: {port}")
+            logger.info(f"  Database: {database}")
+            logger.info(f"  User: {user}")
+            logger.info(f"  Password length: {len(password) if password else 0}")
+        except Exception as e:
+            logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
+            # Fallback to environment variables
+            host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+            port = os.getenv("POSTGRES_PORT", "5432")
+            database = os.getenv("POSTGRES_DB", "ssg")
+            user = os.getenv("POSTGRES_USER", "postgres")
+            password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")  # Use correct password
+            
+            logger.info(f"Environment variables check:")
+            logger.info(f"  POSTGRES_HOST: {os.getenv('POSTGRES_HOST', 'Not set')}")
+            logger.info(f"  POSTGRES_PORT: {os.getenv('POSTGRES_PORT', 'Not set')}")
+            logger.info(f"  POSTGRES_DB: {os.getenv('POSTGRES_DB', 'Not set')}")
+            logger.info(f"  POSTGRES_USER: {os.getenv('POSTGRES_USER', 'Not set')}")
+            logger.info(f"  POSTGRES_PASSWORD: {'*' * len(os.getenv('POSTGRES_PASSWORD', '')) if os.getenv('POSTGRES_PASSWORD') else 'Not set'}")
+            
+            logger.info(f"Using connection parameters:")
+            logger.info(f"  Host: {host}")
+            logger.info(f"  Port: {port}")
+            logger.info(f"  Database: {database}")
+            logger.info(f"  User: {user}")
+            logger.info(f"  Password length: {len(password) if password else 0}")
         
         logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
         
@@ -73,27 +105,65 @@ def check_for_data(**context):
         
         cursor = conn.cursor()
         
-        # Check if there's data in the operator_daily_performance table
-        logger.info("Executing query to count records in operator_daily_performance table")
-        cursor.execute("SELECT COUNT(*) FROM operator_daily_performance;")
+        # Check if there's recent data in the operator_daily_performance table (last 2 days)
+        logger.info("Executing query to count recent records in operator_daily_performance table")
+        cursor.execute("""
+            SELECT COUNT(*) FROM operator_daily_performance 
+            WHERE created_at >= CURRENT_DATE - INTERVAL '2 days'
+        """)
         count = cursor.fetchone()[0]
         
         cursor.close()
         conn.close()
         
-        logger.info(f"Found {count} records in operator_daily_performance table")
+        logger.info(f"Found {count} recent records in operator_daily_performance table")
         
         if count > 0:
-            logger.info(f"Found {count} records in operator_daily_performance table. Proceeding with transformation.")
+            logger.info(f"Found {count} recent records in operator_daily_performance table. Proceeding with transformation.")
             return 'has_data'
         else:
-            logger.info("No data found in operator_daily_performance table. Skipping transformation.")
+            # Also check if this might be the first run by checking other tables
+            try:
+                conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    database=database,
+                    user=user,
+                    password=password
+                )
+                cursor = conn.cursor()
+                
+                # Check if ETL log table exists and has recent data
+                cursor.execute("""
+                    SELECT COUNT(*) FROM etl_extract_log 
+                    WHERE lastextractdatetime >= CURRENT_DATE - INTERVAL '2 days'
+                """)
+                log_count = cursor.fetchone()[0]
+                logger.info(f"Found {log_count} recent records in etl_extract_log table")
+                
+                cursor.close()
+                conn.close()
+                
+                if log_count > 0:
+                    logger.info("Recent ETL process has run but no recent data found in operator_daily_performance table")
+                    logger.info("This might indicate an issue with the data extraction process or no new data")
+                    # Still return has_data to trigger transformation for debugging
+                    logger.info("Proceeding with transformation to check what happens...")
+                    return 'has_data'
+                else:
+                    logger.info("No recent ETL activity - this might be the first run or ETL is not running")
+                    
+            except Exception as e:
+                logger.info(f"Could not check etl_extract_log table: {e}")
+            
+            logger.info("No recent data found in operator_daily_performance table. Skipping transformation.")
             return 'no_data'
             
     except Exception as e:
         logger.error(f"Error checking for data: {e}")
-        # In case of error, it's safer to skip the transformation
-        return 'no_data'
+        # Even in case of error, let's try to proceed to see what happens
+        logger.info("Error checking for data, but proceeding with transformation for debugging")
+        return 'has_data'
 
 def log_start(**context):
     """
@@ -145,7 +215,7 @@ dag = DAG(
     'hanger_line_daily_transform',
     default_args=default_args,
     description='Daily transformation of hanger line data',
-    schedule_interval='0 2 * * *',  # Run daily at 2:00 AM PKT
+    schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
     catchup=False,
     tags=['ssg', 'hanger_line', 'transformation'],
     max_active_runs=1

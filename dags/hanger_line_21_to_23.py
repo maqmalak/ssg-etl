@@ -687,7 +687,7 @@ default_args = {
 @dag(
     dag_id="etl_hanger_lines_21-22-23",
     default_args=default_args,
-    schedule="@once",  # Every 30 minutes
+    schedule="*/05 * * * *",  # Every 30 minutes
     tags=["ssg", "line", "to-pg-ssg"],
     catchup=False,
     max_active_runs=1,

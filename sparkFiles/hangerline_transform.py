@@ -4,12 +4,26 @@ This script reads data from the pg-ssg database, performs aggregation, and saves
 """
 
 import sys
-import os
 import glob
+import psycopg2
+import os
+import logging
+from pendulum import timezone
+from datetime import datetime, timedelta
 
+from airflow.hooks.base import BaseHook
 # Add the dags directory to the Python path so we can import db_utils
 dags_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dags')
 sys.path.append(os.path.abspath(dags_path))
+
+
+# Timezone configuration
+PKT = timezone("Asia/Karachi")
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 print(f"Python path: {sys.path}")
 print(f"DAGs path exists: {os.path.exists(dags_path)}")
@@ -24,7 +38,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from db_utils import (
+    from dags.db_utils import (
         get_postgres_connection_params, 
         get_postgres_jdbc_properties
     )
@@ -57,7 +71,6 @@ def create_spark_session():
         # If no driver found, try to download it
         if not jdbc_driver_path:
             print("PostgreSQL JDBC driver not found at any expected location")
-            jdbc_driver_path = download_postgresql_jdbc_driver()
             
         if jdbc_driver_path and os.path.exists(jdbc_driver_path):
             print(f"Using PostgreSQL JDBC driver: {jdbc_driver_path}")
@@ -85,51 +98,58 @@ def create_spark_session():
         raise
 
 
-def download_postgresql_jdbc_driver():
-    """Download the newer PostgreSQL JDBC driver if it's not already present"""
-    
-    # Define the target directory and filename
-    target_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jdbc-drivers")
-    driver_filename = "postgresql-42.7.3.jar"
-    target_path = os.path.join(target_dir, driver_filename)
-    
-    # Check if the driver already exists
-    if os.path.exists(target_path):
-        print(f"PostgreSQL JDBC driver already exists at {target_path}")
-        return target_path
-    
-    # Create the target directory if it doesn't exist
-    os.makedirs(target_dir, exist_ok=True)
-    
-    # Define the download URL for the newer version
-    download_url = "https://jdbc.postgresql.org/download/postgresql-42.7.3.jar"
-    
-    try:
-        print(f"Downloading PostgreSQL JDBC driver from {download_url}...")
-        import urllib.request
-        urllib.request.urlretrieve(download_url, target_path)
-        print(f"Successfully downloaded PostgreSQL JDBC driver to {target_path}")
-        return target_path
-    except Exception as e:
-        print(f"Error downloading PostgreSQL JDBC driver: {e}")
-        return None
 
 
 def get_connection_params_fallback():
-    """Get connection parameters with fallback to environment variables"""
-    # Try to get from environment variables first
-    host = os.getenv("POSTGRES_HOST", "172.16.7.6")
-    port = os.getenv("POSTGRES_PORT", "5432")
-    database = os.getenv("POSTGRES_DB", "ssg")
-    user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "P@akistan12")
+    # Get connection parameters from Airflow connection
+    try:
+        connection = BaseHook.get_connection("pg-ssg")
+        host = connection.host
+        port = connection.port if connection.port else 5432
+        database = connection.schema
+        user = connection.login
+        password = connection.password
+        
+        logger.info(f"Using Airflow connection 'pg-ssg':")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Port: {port}")
+        logger.info(f"  Database: {database}")
+        logger.info(f"  User: {user}")
+        logger.info(f"  Password length: {len(password) if password else 0}")
+    except Exception as e:
+        logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
+        # Fallback to environment variables
+        host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+        port = os.getenv("POSTGRES_PORT", "5432")
+        database = os.getenv("POSTGRES_DB", "ssg")
+        user = os.getenv("POSTGRES_USER", "postgres")
+        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")  # Use correct password
+        
+        logger.info(f"Environment variables check:")
+        logger.info(f"  POSTGRES_HOST: {os.getenv('POSTGRES_HOST', 'Not set')}")
+        logger.info(f"  POSTGRES_PORT: {os.getenv('POSTGRES_PORT', 'Not set')}")
+        logger.info(f"  POSTGRES_DB: {os.getenv('POSTGRES_DB', 'Not set')}")
+        logger.info(f"  POSTGRES_USER: {os.getenv('POSTGRES_USER', 'Not set')}")
+        logger.info(f"  POSTGRES_PASSWORD: {'*' * len(os.getenv('POSTGRES_PASSWORD', '')) if os.getenv('POSTGRES_PASSWORD') else 'Not set'}")
+        
+        logger.info(f"Using connection parameters:")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Port: {port}")
+        logger.info(f"  Database: {database}")
+        logger.info(f"  User: {user}")
+        logger.info(f"  Password length: {len(password) if password else 0}")
     
-    print(f"Using connection parameters from environment variables:")
-    print(f"  Host: {host}")
-    print(f"  Port: {port}")
-    print(f"  Database: {database}")
-    print(f"  User: {user}")
-    
+    logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
+        
+        # Connect to PostgreSQL
+    conn = psycopg2.connect(
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password
+    )
+
     return {
         "host": host,
         "port": port,
@@ -138,6 +158,10 @@ def get_connection_params_fallback():
         "password": password,
         "jdbc_url": f"jdbc:postgresql://{host}:{port}/{database}"
     }
+
+
+
+
 
 
 def transform_data(spark):
@@ -183,14 +207,14 @@ def transform_data(spark):
                 .option("driver", "org.postgresql.Driver") \
                 .load()
             
-            print(f"All Data loaded successfully. Row count: {df.count()}")
+            print(f"Data loaded successfully. Row count: {df.count()}")
 
             # Filter the data to only include records from the last day
             # We'll do this after loading to avoid SQL dialect issues
             from pyspark.sql.functions import current_date, date_sub
             df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
             
-            print(f"Data loaded and filtered successfully. Row count: {df.count()}")
+            print(f"Data filtered successfully. Row count: {df.count()}")
         except Exception as e:
             print(f"Error reading data from PostgreSQL with explicit driver: {str(e)}")
             # If we can't read data with explicit driver, try without specifying the driver
@@ -213,26 +237,6 @@ def transform_data(spark):
                 print(f"Retry also failed: {str(retry_e)}")
                 # If we still can't read data, return early
                 return False
-            
-            print(f"Data loaded successfully. Row count: {df.count()}")
-        except Exception as e:
-            print(f"Error reading data from PostgreSQL with explicit driver: {str(e)}")
-            # If we can't read data with explicit driver, try without specifying the driver
-            try:
-                print("Retrying without specifying driver class...")
-                df = spark.read \
-                    .format("jdbc") \
-                    .option("url", postgres_jdbc_url) \
-                    .option("dbtable", "operator_daily_performance") \
-                    .option("user", postgres_jdbc_properties["user"]) \
-                    .option("password", postgres_jdbc_properties["password"]) \
-                    .load()
-                
-                print(f"Data loaded successfully without explicit driver. Row count: {df.count()}")
-            except Exception as retry_e:
-                print(f"Retry also failed: {str(retry_e)}")
-                # If we still can't read data, return early
-                return False
         
         # Check if table exists and has data
         try:
@@ -242,13 +246,13 @@ def transform_data(spark):
             row_count = 0
             
         if row_count == 0:
-            print("Warning: No data found in operator_daily_performance table")
+            print("Warning: No data found in operator_daily_performance table for the last day")
             return True
             
         # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
         print("Performing aggregation 1...")
         try:
-            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description","source_connection") \
+            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description", "source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 1: {str(e)}")
@@ -257,7 +261,7 @@ def transform_data(spark):
         # Transform 2: Group by ODP_Date and Shift, sum ODPD_Quantity
         print("Performing aggregation 2...")
         try:
-            aggregated_df2 = df.groupBy("ODP_Date", "Shift","source_connection") \
+            aggregated_df2 = df.groupBy("ODP_Date", "Shift", "source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 2: {str(e)}")
@@ -266,7 +270,7 @@ def transform_data(spark):
         # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
         print("Performing aggregation 3...")
         try:
-            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName","source_connection") \
+            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName", "source_connection") \
                 .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
         except Exception as e:
             print(f"Error in aggregation 3: {str(e)}")

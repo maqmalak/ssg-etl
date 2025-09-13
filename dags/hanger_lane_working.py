@@ -46,7 +46,7 @@ except ImportError as e:
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the correct source constants
-from scripts.constans.db_sources import SOURCE_LINE_21_22_23 
+from scripts.constans.db_sources import SOURCE_HANGER_LANE 
 from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
@@ -665,7 +665,7 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_hanger_lines_21-22-23",
+    dag_id="etl_hanger_lines_dynamic_working",
     default_args=default_args,
     schedule="@once",  # Every 30 minutes
     tags=["ssg", "line", "to-pg-ssg"],
@@ -858,7 +858,7 @@ def dynamic_hanger_db_etl_working():
 
     # Create tasks for each data source
     save_tasks = []
-    for conn_id in SOURCE_LINE_21_22_23:
+    for conn_id in SOURCE_HANGER_LANE:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
         # task_id_suffix = 'dynamic'

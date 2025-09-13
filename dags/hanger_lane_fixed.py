@@ -1,5 +1,7 @@
 """
-Fixed hanger_lane DAG with proper error handling for missing connections
+ETL Pipeline for Hanger lines Data
+This DAG extracts data from MSSQL sources and loads it into a PostgreSQL target.
+Fixed version with proper data extraction.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ except ImportError as e:
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the correct source constants
-from scripts.constans.db_sources import SOURCE_LINE_21_22_23 
+from scripts.constans.db_sources import SOURCE_HANGER_LANE 
 from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
@@ -103,14 +105,8 @@ def get_postgres_engine():
     Returns:
         sqlalchemy.engine.Engine: PostgreSQL engine instance
     """
-    try:
-        connection = BaseHook.get_connection("pg-ssg")
-        uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
-    except Exception as e:
-        logger.warning(f"Could not get pg-ssg connection, using default values: {e}")
-        # Fallback to default values for testing
-        uri = "postgresql://postgres:P@akistan12@172.16.7.6:5432/ssg"
-    
+    connection = BaseHook.get_connection("pg-ssg")
+    uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(
         uri,
@@ -181,8 +177,7 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
             return result
     except Exception as e:
         logger.error(f"Error fetching last extract datetime for {source_connection}: {e}")
-        # If we can't access the log table, return None to trigger full extraction
-        return None
+        raise
     finally:
         engine.dispose()
 
@@ -239,7 +234,7 @@ def insert_etl_log(
         logger.info(f"Inserted ETL log for {source_connection}")
     except Exception as e:
         logger.error(f"Failed to insert ETL log for {source_connection}: {e}")
-        # Don't raise the exception, just log it
+        raise
     finally:
         engine.dispose()
 
@@ -285,8 +280,7 @@ def get_min_creation_date_from_source(conn_str: str) -> Optional[datetime]:
             return result
     except Exception as e:
         logger.error(f"Error fetching min CreationDate from source: {e}")
-        # If we can't connect to source, return None
-        return None
+        raise
 
 
 def validate_data(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -326,21 +320,13 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     last_extract_dt = get_last_extract_dt_from_log(connection_id)
     
     # Get source connection details
-    try:
-        connection = BaseHook.get_connection(connection_id)
-        conn_str = build_mssql_conn_str(connection)
-    except Exception as e:
-        logger.error(f"Could not get connection {connection_id}: {e}")
-        # If we can't get the connection, we can't fetch data
-        return
+    connection = BaseHook.get_connection(connection_id)
+    conn_str = build_mssql_conn_str(connection)
     
     # If no previous extract, get minimum CreationDate from source
     if not last_extract_dt:
         last_extract_dt = get_min_creation_date_from_source(conn_str)
-        if last_extract_dt:
-            logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
-        else:
-            logger.info(f"[{connection_id}] Could not get min CreationDate from source, fetching all data")
+        logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
     
     # Build query - FIXED: Removed extra commas in SELECT clause
     query = """
@@ -513,7 +499,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
         
     except Exception as e:
         logger.error(f"Error fetching data from {connection_id}: {e}")
-        # Don't raise the exception, just log it and continue
+        raise
 
 
 @retry_on_exception()
@@ -587,7 +573,7 @@ def save_to_postgres(connection_id: str) -> str:
                 except Exception as e:
                     session.rollback()
                     logger.error(f"Error saving sub-batch: {e}")
-                    # Don't raise, just continue
+                    raise
                 
                 # Explicit cleanup
                 del sub_batch
@@ -642,7 +628,7 @@ def save_to_postgres(connection_id: str) -> str:
             "Failed",
             str(e),
         )
-        # Don't raise the exception, just log it
+        raise
     finally:
         if 'session' in locals():
             session.close()
@@ -665,17 +651,17 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_hanger_lines_21-22-23",
+    dag_id="etl_hanger_lines_dynamic_fixed",
     default_args=default_args,
-    schedule="@once",  # Every 30 minutes
+    schedule="*/30 * * * *",  # Every 30 minutes
     tags=["ssg", "line", "to-pg-ssg"],
     catchup=False,
     max_active_runs=1,
-    description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Working)",
+    description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Fixed)",
 )
-def dynamic_hanger_db_etl_working():
+def dynamic_hanger_db_etl_fixed():
     """
-    Dynamic ETL DAG for Hanger lines data with proper error handling.
+    Dynamic ETL DAG for Hanger lines data with fixed data extraction.
     
     This DAG dynamically creates tasks for each data source defined in SOURCE_HANGER_LANE.
     For each source, it:
@@ -702,39 +688,28 @@ def dynamic_hanger_db_etl_working():
             last_extract_dt = get_last_extract_dt_from_log(connection_id)
             
             # Get source connection details
-            try:
-                connection = BaseHook.get_connection(connection_id)
-                conn_str = build_mssql_conn_str(connection)
-            except Exception as e:
-                logger.error(f"[{connection_id}] Could not get connection: {e}")
-                # If we can't get the connection, we can't check for new data
-                # Let's be conservative and say there's no new data to avoid errors
-                return False
+            connection = BaseHook.get_connection(connection_id)
+            conn_str = build_mssql_conn_str(connection)
             
             if last_extract_dt:
                 logger.info(f"[{connection_id}] LAST EXTRACT DATETIME: {last_extract_dt}")
                 logger.info(f"[{connection_id}] Found last extract: {last_extract_dt} → Checking for new data")
                 # Check if there's new data since last extract
-                try:
-                    with pyodbc.connect(conn_str) as connection:
-                        cursor = connection.cursor()
-                        # Query to check if there are records newer than last_extract_dt
-                        cursor.execute("""
-                            SELECT COUNT(*) 
-                            FROM [IHS].[dbo].[ODP_Detail] 
-                            WHERE created_at > ?
-                        """, [last_extract_dt])
-                        count = cursor.fetchone()[0]
-                        has_new_data = count > 0
-                        logger.info(f"[{connection_id}] Found {count} new records since last extract → {'Proceeding to extract' if has_new_data else 'Skipping extraction'}")
-                        logger.info(f"[{connection_id}] DECISION: {'SAVE PATH' if has_new_data else 'SKIP PATH'} (Last extract: {last_extract_dt})")
-                        return has_new_data
-                except Exception as e:
-                    logger.error(f"[{connection_id}] Error checking for new data in database: {e}")
-                    # If we can't connect to the source database, be conservative and skip
-                    return False
+                with pyodbc.connect(conn_str) as connection:
+                    cursor = connection.cursor()
+                    # Query to check if there are records newer than last_extract_dt
+                    cursor.execute("""
+                        SELECT COUNT(*) 
+                        FROM [IHS].[dbo].[ODP_Detail] 
+                        WHERE created_at > ?
+                    """, [last_extract_dt])
+                    count = cursor.fetchone()[0]
+                    has_new_data = count > 0
+                    logger.info(f"[{connection_id}] Found {count} new records since last extract → {'Proceeding to extract' if has_new_data else 'Skipping extraction'}")
+                    logger.info(f"[{connection_id}] DECISION: {'SAVE PATH' if has_new_data else 'SKIP PATH'} (Last extract: {last_extract_dt})")
+                    return has_new_data
             else:
-                logger.info(f"[{connection_id}] LAST EXTRACT DATETIME: None (First run or no log)")
+                logger.info(f"[{connection_id}] LAST EXTRACT DATETIME: None (First run)")
                 logger.info(f"[{connection_id}] No previous extract date found → Proceeding to extract")
                 logger.info(f"[{connection_id}] DECISION: SAVE PATH (No previous extract)")
                 return True
@@ -776,10 +751,8 @@ def dynamic_hanger_db_etl_working():
             str: Next task to execute
         """
         if has_new_data:
-            logger.info(f"[{connection_id}] DECISION: Proceeding to extract data")
             return f"extract_{connection_id}"
         else:
-            logger.info(f"[{connection_id}] DECISION: Skipping data extraction")
             return f"skip_{connection_id}"
     
     
@@ -840,8 +813,7 @@ def dynamic_hanger_db_etl_working():
                 
         except Exception as e:
             logger.error(f"Error during data transformation: {e}")
-            # Don't raise the exception, just log it
-            return f"Transformation failed: {e}"
+            raise
 
 
 
@@ -853,12 +825,11 @@ def dynamic_hanger_db_etl_working():
         Args:
             connection_id (str): Source connection identifier
         """
-        logger.info(f"[{connection_id}] Skipping — no new data since last extract or connection issue.")
-
-
+        logger.info(f"[{connection_id}] Skipping — no new data since last extract.")
+    
     # Create tasks for each data source
     save_tasks = []
-    for conn_id in SOURCE_LINE_21_22_23:
+    for conn_id in SOURCE_HANGER_LANE:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
         # task_id_suffix = 'dynamic'
@@ -892,8 +863,8 @@ def dynamic_hanger_db_etl_working():
     # else:
     #     start >> transform_task >> end
     
-    return dynamic_hanger_db_etl_working
+    return dynamic_hanger_db_etl_fixed
 
 
 # Create the DAG instance
-dag = dynamic_hanger_db_etl_working()
+dag = dynamic_hanger_db_etl_fixed()

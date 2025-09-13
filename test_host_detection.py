@@ -17,10 +17,10 @@ def test_host_detection():
         print("Testing host detection logic...")
         
         # Simulate the logic from get_postgres_engine
-        host = "127.16.7.6"  # Simulate localhost from Airflow connection
+        host = "172.16.7.6"  # Simulate localhost from Airflow connection
         print(f"Original host from Airflow connection: {host}")
         
-        if host == "127.16.7.6" or host == "localhost" or host == "127.0.0.1":
+        if host == "172.16.7.6" or host == "localhost" or host == "127.0.0.1":
             print("Host appears to be localhost. Checking for better alternatives...")
             # Check common database hosts
             possible_hosts = ["172.16.7.6", "postgres", "database", "pg-ssg"]
@@ -48,7 +48,7 @@ def test_connection_availability():
     try:
         import socket
         
-        hosts_to_test = ["127.16.7.6", "172.16.7.6", "localhost", "postgres", "database", "pg-ssg"]
+        hosts_to_test = ["172.16.7.6", "172.16.7.6", "localhost", "postgres", "database", "pg-ssg"]
         
         print("Testing availability of database hosts:")
         for host in hosts_to_test:

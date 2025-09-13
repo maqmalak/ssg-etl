@@ -262,7 +262,7 @@ def build_mssql_conn_str(connection) -> str:
     Returns:
         str: MSSQL connection string
     """
-    return (
+    conn_str = (
         "DRIVER={FreeTDS};"
         f"SERVER={connection.host};"
         "PORT=1433;"
@@ -271,6 +271,8 @@ def build_mssql_conn_str(connection) -> str:
         f"PWD={connection.password};"
         "TDS_Version=7.0;"
     )
+    logger.info(f"Built MSSQL connection string for host: {connection.host}, database: {connection.schema}, user: {connection.login}")
+    return conn_str
 
 
 @retry_on_exception()
@@ -285,6 +287,7 @@ def get_min_creation_date_from_source(conn_str: str) -> Optional[datetime]:
         Optional[datetime]: Minimum CreationDate or None if not found
     """
     try:
+        logger.info(f"Attempting to connect to MSSQL source with connection string: {conn_str[:50]}...")  # Log first 50 chars for security
         with pyodbc.connect(conn_str) as connection:
             cursor = connection.cursor()
             cursor.execute("SELECT MIN(created_at) FROM [IHS].[dbo].[ODP_Detail] ;")
@@ -293,6 +296,15 @@ def get_min_creation_date_from_source(conn_str: str) -> Optional[datetime]:
             return result
     except Exception as e:
         logger.error(f"Error fetching min CreationDate from source: {e}")
+        # Log connection string details (without password) for debugging
+        try:
+            # Extract host from connection string for logging
+            import re
+            host_match = re.search(r'SERVER=([^;]+)', conn_str)
+            host = host_match.group(1) if host_match else "unknown"
+            logger.error(f"Failed to connect to MSSQL server at host: {host}")
+        except:
+            pass
         # If we can't connect to source, return None
         return None
 

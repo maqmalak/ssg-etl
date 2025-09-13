@@ -118,11 +118,11 @@ def download_postgresql_jdbc_driver():
 def get_connection_params_fallback():
     """Get connection parameters with fallback to environment variables"""
     # Try to get from environment variables first
-    host = os.getenv("POSTGRES_HOST", "127.16.7.6")
+    host = os.getenv("POSTGRES_HOST", "172.16.7.6")
     port = os.getenv("POSTGRES_PORT", "5432")
     database = os.getenv("POSTGRES_DB", "ssg")
     user = os.getenv("POSTGRES_USER", "postgres")
-    password = os.getenv("POSTGRES_PASSWORD", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
     
     print(f"Using connection parameters from environment variables:")
     print(f"  Host: {host}")

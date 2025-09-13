@@ -111,7 +111,7 @@ def get_postgres_engine():
         
         # Check if the host is localhost and potentially incorrect
         host = connection.host
-        if host == "127.16.7.6" or host == "localhost" or host == "127.0.0.1":
+        if host == "172.16.7.6" or host == "localhost" or host == "127.0.0.1":
             logger.warning(f"Airflow connection host '{host}' appears to be localhost. Checking for better alternatives...")
             # Try to detect the correct database host
             import socket

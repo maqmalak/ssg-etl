@@ -3,14 +3,14 @@
 ## Issue Identified
 The hanger_lane DAG was failing with the error:
 ```
-(psycopg2.OperationalError) could not translate host name "kistan12@127.16.7.6" to address: Name or service not known
+(psycopg2.OperationalError) could not translate host name "kistan12@172.16.7.6" to address: Name or service not known
 ```
 
 ## Root Cause
 The password `P@akistan12` contains an "@" symbol which was not properly URL-encoded in the connection URI. This caused the URI parser to incorrectly interpret the connection string as:
 - Username: `postgres:P`  
 - Password: `akistan12`
-- Host: `127.16.7.6`
+- Host: `172.16.7.6`
 
 Instead of the correct interpretation:
 - Username: `postgres`

@@ -45,7 +45,7 @@ except ImportError as e:
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from scripts.constans.db_sources import SOURCE_LINE_21_22_23, SOURCE_LINE_24_25_26, SOURCE_LINE_27_28_29
-from create_target_pg_hl_table import (
+from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
     create_table_if_not_exists

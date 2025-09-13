@@ -17,6 +17,7 @@ pandas
 pendulum
 sqlalchemy
 pyspark==3.5.0
+psutil
 
 # Additional dependencies for Spark
 py4j

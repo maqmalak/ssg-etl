@@ -47,7 +47,7 @@ except ImportError as e:
 # Add the project root to the Python path for script imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.constans.db_sources import SOURCE_HANGER_LANE_25_TO_29 
+from scripts.constans.db_sources import SOURCE_HANGER_LANE 
 from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
@@ -637,7 +637,7 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_hanger_lines_dynamic",
+    dag_id="etl_hanger_lines_dynamic_optimized",
     default_args=default_args,
     schedule="*/30 * * * *",  # Every 30 minutes
     tags=["ssg", "line", "to-pg-ssg"],
@@ -815,7 +815,7 @@ def dynamic_hanger_db_etl_optimized():
     
     # Create tasks for each data source
     save_tasks = []
-    for conn_id in SOURCE_HANGER_LANE_25_TO_29:
+    for conn_id in SOURCE_HANGER_LANE:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
         # task_id_suffix = 'dynamic'

@@ -1,7 +1,6 @@
 """
 ETL Pipeline for Hanger lines Data
 This DAG extracts data from MSSQL sources and loads it into a PostgreSQL target.
-Optimized version with improved memory management and ETL best practices.
 """
 
 from __future__ import annotations
@@ -10,13 +9,11 @@ import logging
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Generator
+from typing import Dict, List, Optional, Any
 
 import subprocess
 import sys
 import os
-import psutil
-import gc
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 import pendulum
@@ -47,7 +44,7 @@ except ImportError as e:
 # Add the project root to the Python path for script imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.constans.db_sources import SOURCE_HANGER_LANE_25_TO_29 
+from scripts.constans.db_sources import SOURCE_LINE_21_22_23, SOURCE_LINE_24_25_26, SOURCE_LINE_27_28_29
 from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
@@ -66,36 +63,6 @@ PKT = timezone("Asia/Karachi")
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
-# Memory optimization constants
-BATCH_SIZE = 1000
-MAX_MEMORY_USAGE_PERCENT = 80.0  # Maximum memory usage percentage before triggering cleanup
-
-
-def get_memory_usage() -> float:
-    """Get current memory usage percentage."""
-    return psutil.virtual_memory().percent
-
-
-def log_memory_usage(operation: str) -> None:
-    """Log current memory usage."""
-    memory_percent = get_memory_usage()
-    logger.info(f"[MEMORY] {operation} - Memory usage: {memory_percent:.2f}%")
-
-
-def perform_memory_cleanup() -> None:
-    """Perform garbage collection to free memory."""
-    gc.collect()
-    logger.info("[MEMORY] Garbage collection performed")
-
-
-def check_memory_and_cleanup(operation: str) -> None:
-    """Check memory usage and perform cleanup if needed."""
-    log_memory_usage(operation)
-    if get_memory_usage() > MAX_MEMORY_USAGE_PERCENT:
-        logger.warning(f"[MEMORY] High memory usage detected during {operation}")
-        perform_memory_cleanup()
-        log_memory_usage(f"{operation} - After cleanup")
-
 
 def get_postgres_engine():
     """
@@ -106,15 +73,13 @@ def get_postgres_engine():
     """
     connection = BaseHook.get_connection("pg-ssg")
     uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
-    # Use connection pooling for better performance with optimized settings
+    # Use connection pooling for better performance
     engine = create_engine(
         uri,
-        pool_size=5,  # Reduced pool size to prevent resource exhaustion
-        max_overflow=10,
+        pool_size=10,
+        max_overflow=20,
         pool_pre_ping=True,
         pool_recycle=3600,
-        pool_timeout=30,
-        echo=False  # Disable SQL logging for performance
     )
     return engine
 
@@ -299,9 +264,9 @@ def validate_data(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 @retry_on_exception()
-def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]], None, None]:
+def fetch_data_from_source(connection_id: str):
     """
-    Fetch data from the source database in batches with memory optimization.
+    Fetch data from the source database in batches.
     
     Args:
         connection_id (str): Source connection identifier
@@ -311,9 +276,6 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     """
     start_time = time.time()
     logger.info(f"[{connection_id}] Starting data extraction")
-    
-    # Memory monitoring
-    check_memory_and_cleanup(f"{connection_id} - Start extraction")
     
     # Get last extract datetime
     last_extract_dt = get_last_extract_dt_from_log(connection_id)
@@ -348,40 +310,40 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             ,[ODP_Lump_Sum_Payment]
             ,[ODP_Make_Up_Pay_Rate]
             ,[ODP_Last_Hanger_Start_Time]
-            ,[ODPD_Key],
-            ,[ODPD_Workstation],
-            ,[ODPD_WC_Key],
-            ,[ODPD_Quantity],
-            ,[ODPD_ST_Key],
-            ,[ST_ID],
-            ,[ST_Description],
-            ,[ODPD_Lot_Number],
-            ,[ODPD_OC_Key],
-            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN 'Loading' 
+            [ODPD_Key],
+            [ODPD_Workstation],
+            [ODPD_WC_Key],
+            [ODPD_Quantity],
+            [ODPD_ST_Key],
+            [ST_ID],
+            [ST_Description],
+            [ODPD_Lot_Number],
+            [ODPD_OC_Key],
+            CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN 'Loading' 
                 WHEN [OC_Description]='Pressing' THEN 'Un-Loading'
             else [OC_Description] END AS OC_Description,
-            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN ODPD_Quantity else 0 END AS Loading_Qty,
-            ,CASE WHEN [OC_Description]='Pressing' THEN ODPD_Quantity else 0 END AS UnLoading_Qty,
-            ,[OC_Piece_Rate],
-            ,[OC_Standard_Time],
-            ,[ODPD_Standard],
-            ,ODPD_Actual_Time,
-            ,[ODPD_PA_Key],
-            ,[ODPD_Pay_Rate],
-            ,[ODPD_Piece_Rate],
-            ,[ODPD_Start_Time],
-            ,[ODPD_CM_Key],
-            ,[CM_Description],
-            ,[ODPD_SM_Key],
-            ,[SM_Description],
-            ,[ODPD_Normal_Pay_Factor],
-            ,[ODPD_Is_Overtime],
-            ,[ODPD_Overtime_Factor],
-            ,[ODPD_Edited_By],
-            ,[ODPD_Edited_Date],
-            ,[ODPD_Actual_Time_From_Reader],
-            ,[ODPD_STPO_Key],
-            ,[created_at] as created_at
+            CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN ODPD_Quantity else 0 END AS Loading_Qty,
+            CASE WHEN [OC_Description]='Pressing' THEN ODPD_Quantity else 0 END AS UnLoading_Qty,
+            [OC_Piece_Rate],
+            [OC_Standard_Time],
+            [ODPD_Standard],
+            ODPD_Actual_Time,
+            [ODPD_PA_Key],
+            [ODPD_Pay_Rate],
+            [ODPD_Piece_Rate],
+            [ODPD_Start_Time],
+            [ODPD_CM_Key],
+            [CM_Description],
+            [ODPD_SM_Key],
+            [SM_Description],
+            [ODPD_Normal_Pay_Factor],
+            [ODPD_Is_Overtime],
+            [ODPD_Overtime_Factor],
+            [ODPD_Edited_By],
+            [ODPD_Edited_Date],
+            [ODPD_Actual_Time_From_Reader],
+            [ODPD_STPO_Key],
+            [created_at] as created_at
         FROM [IHS].[dbo].[ODP_Detail] OD
         INNER JOIN [IHS].[dbo].[ODP_Master] OM ON OD.[ODPD_ODP_Key] = OM.[ODP_Key]  
         INNER JOIN [IHS_SHARED].[dbo].[Employee_Master] EM   ON OM.[ODP_EM_Key]=EM.[EM_Key]
@@ -402,98 +364,85 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     
     # Execute query
     try:
-        with pyodbc.connect(conn_str, autocommit=True) as connection:
+        with pyodbc.connect(conn_str) as connection:
             cursor = connection.cursor()
             logger.info(f"[{connection_id}] Executing query with params: {params}")
             cursor.execute(query, params)
             
-            # Fetch data in smaller batches to optimize memory usage
+            # Fetch data in batches to avoid memory issues and provide progress updates
+            batch_size = 1000
             rows_fetched = 0
-            batch_count = 0
             
             while True:
-                # Check memory before fetching next batch
-                check_memory_and_cleanup(f"{connection_id} - Before fetching batch {batch_count}")
-                
-                rows = cursor.fetchmany(BATCH_SIZE)
+                rows = cursor.fetchmany(batch_size)
                 if not rows:
                     break
                     
                 rows_fetched += len(rows)
-                batch_count += 1
-                logger.info(f"[{connection_id}] Fetched batch {batch_count} with {len(rows)} rows ({rows_fetched} total)")
+                logger.info(f"[{connection_id}] Fetched {rows_fetched} rows so far...")
                 
                 # Convert rows to dictionaries
                 batch = []
-                column_names = [column[0] for column in cursor.description]
-                
                 for row in rows:
-                    row_dict = dict(zip(column_names, row))
                     batch.append({
-                        'ODP_Key': str(row_dict.get('ODP_Key')) if row_dict.get('ODP_Key') else None,
-                        'ODP_Date': row_dict.get('ODP_Date'),
-                        'Shift': row_dict.get('Shift'),
-                        'ODP_EM_Key': int(row_dict.get('ODP_EM_Key')) if row_dict.get('ODP_EM_Key') and str(row_dict.get('ODP_EM_Key')).isdigit() else 0,
-                        'EM_RFID': str(row_dict.get('EM_RFID')) if row_dict.get('EM_RFID') else None,
-                        'EM_Department': str(row_dict.get('EM_Department')) if row_dict.get('EM_Department') else None,
-                        'EM_FirstName': str(row_dict.get('EM_FirstName')) if row_dict.get('EM_FirstName') else None,
-                        'EM_LastName': str(row_dict.get('EM_LastName')) if row_dict.get('EM_LastName') else None,
-                        'ODP_Actual_Clock_In': row_dict.get('ODP_Actual_Clock_In'),
-                        'ODP_Actual_Clock_Out': row_dict.get('ODP_Actual_Clock_Out'),
-                        'ODP_Shift_Clock_In': row_dict.get('ODP_Shift_Clock_In'),
-                        'ODP_Shift_Clock_Out': row_dict.get('ODP_Shift_Clock_Out'),
-                        'ODP_First_Hanger_Time': row_dict.get('ODP_First_Hanger_Time'),
-                        'ODP_Last_Hanger_Time': row_dict.get('ODP_Last_Hanger_Time'),
-                        'ODP_Current_Station': str(row_dict.get('ODP_Current_Station')) if row_dict.get('ODP_Current_Station') else None,
-                        'ODP_Lump_Sum_Payment': float(row_dict.get('ODP_Lump_Sum_Payment')) if row_dict.get('ODP_Lump_Sum_Payment') else 0.0,
-                        'ODP_Make_Up_Pay_Rate': float(row_dict.get('ODP_Make_Up_Pay_Rate')) if row_dict.get('ODP_Make_Up_Pay_Rate') else 0.0,
-                        'ODP_Last_Hanger_Start_Time': row_dict.get('ODP_Last_Hanger_Start_Time'),
-                        'ODPD_Key': str(row_dict.get('ODPD_Key')) if row_dict.get('ODPD_Key') else None,
-                        'ODPD_Workstation': str(row_dict.get('ODPD_Workstation')) if row_dict.get('ODPD_Workstation') else None,
-                        'ODPD_WC_Key': int(row_dict.get('ODPD_WC_Key')) if row_dict.get('ODPD_WC_Key') and str(row_dict.get('ODPD_WC_Key')).isdigit() else 0,
-                        'ODPD_Quantity': int(row_dict.get('ODPD_Quantity')) if row_dict.get('ODPD_Quantity') and str(row_dict.get('ODPD_Quantity')).isdigit() else 0,
-                        'ODPD_ST_Key': int(row_dict.get('ODPD_ST_Key')) if row_dict.get('ODPD_ST_Key') and str(row_dict.get('ODPD_ST_Key')).isdigit() else 0,
-                        'ST_ID': str(row_dict.get('ST_ID')) if row_dict.get('ST_ID') else None,
-                        'ST_Description': str(row_dict.get('ST_Description')) if row_dict.get('ST_Description') else None,
-                        'ODPD_Lot_Number': str(row_dict.get('ODPD_Lot_Number')) if row_dict.get('ODPD_Lot_Number') else None,
-                        'ODPD_OC_Key': int(row_dict.get('ODPD_OC_Key')) if row_dict.get('ODPD_OC_Key') and str(row_dict.get('ODPD_OC_Key')).isdigit() else 0,
-                        'OC_Description': str(row_dict.get('OC_Description')) if row_dict.get('OC_Description') else None,
-                        'Loading_Qty': int(row_dict.get('Loading_Qty')) if row_dict.get('Loading_Qty') and str(row_dict.get('Loading_Qty')).isdigit() else 0,
-                        'UnLoading_Qty': int(row_dict.get('UnLoading_Qty')) if row_dict.get('UnLoading_Qty') and str(row_dict.get('UnLoading_Qty')).isdigit() else 0,
-                        'OC_Piece_Rate': float(row_dict.get('OC_Piece_Rate')) if row_dict.get('OC_Piece_Rate') else 0.0,
-                        'OC_Standard_Time': float(row_dict.get('OC_Standard_Time')) if row_dict.get('OC_Standard_Time') else 0.0,
-                        'ODPD_Standard': float(row_dict.get('ODPD_Standard')) if row_dict.get('ODPD_Standard') else 0.0,
-                        'ODPD_Actual_Time': float(row_dict.get('ODPD_Actual_Time')) if row_dict.get('ODPD_Actual_Time') else 0.0,
-                        'ODPD_PA_Key': int(row_dict.get('ODPD_PA_Key')) if row_dict.get('ODPD_PA_Key') and str(row_dict.get('ODPD_PA_Key')).isdigit() else 0,
-                        'ODPD_Pay_Rate': float(row_dict.get('ODPD_Pay_Rate')) if row_dict.get('ODPD_Pay_Rate') else 0.0,
-                        'ODPD_Piece_Rate': float(row_dict.get('ODPD_Piece_Rate')) if row_dict.get('ODPD_Piece_Rate') else 0.0,
-                        'ODPD_Start_Time': row_dict.get('ODPD_Start_Time'),
-                        'ODPD_CM_Key': int(row_dict.get('ODPD_CM_Key')) if row_dict.get('ODPD_CM_Key') and str(row_dict.get('ODPD_CM_Key')).isdigit() else 0,
-                        'CM_Description': str(row_dict.get('CM_Description')) if row_dict.get('CM_Description') else None,
-                        'ODPD_SM_Key': int(row_dict.get('ODPD_SM_Key')) if row_dict.get('ODPD_SM_Key') and str(row_dict.get('ODPD_SM_Key')).isdigit() else 0,
-                        'SM_Description': str(row_dict.get('SM_Description')) if row_dict.get('SM_Description') else None,
-                        'ODPD_Normal_Pay_Factor': float(row_dict.get('ODPD_Normal_Pay_Factor')) if row_dict.get('ODPD_Normal_Pay_Factor') else 0.0,
-                        'ODPD_Is_Overtime': bool(row_dict.get('ODPD_Is_Overtime')) if row_dict.get('ODPD_Is_Overtime') is not None else False,
-                        'ODPD_Overtime_Factor': float(row_dict.get('ODPD_Overtime_Factor')) if row_dict.get('ODPD_Overtime_Factor') else 0.0,
-                        'ODPD_Edited_By': str(row_dict.get('ODPD_Edited_By')) if row_dict.get('ODPD_Edited_By') else None,
-                        'ODPD_Edited_Date': row_dict.get('ODPD_Edited_Date'),
-                        'ODPD_Actual_Time_From_Reader': float(row_dict.get('ODPD_Actual_Time_From_Reader')) if row_dict.get('ODPD_Actual_Time_From_Reader') else 0.0,
-                        'ODPD_STPO_Key': int(row_dict.get('ODPD_STPO_Key')) if row_dict.get('ODPD_STPO_Key') and str(row_dict.get('ODPD_STPO_Key')).isdigit() else 0,
-                        'created_at': row_dict.get('created_at'),
-                        'source_connection': connection_id
+                    'ODP_Key': str(row.ODP_Key) if row.ODP_Key else None,
+                    'ODP_Date': row.ODP_Date,
+                    'Shift': row.Shift,
+                    'ODP_EM_Key': int(row.ODP_EM_Key) if row.ODP_EM_Key and str(row.ODP_EM_Key).isdigit() else 0,
+                    'EM_RFID': str(row.EM_RFID) if row.EM_RFID else None,
+                    'EM_Department': str(row.EM_Department) if row.EM_Department else None,
+                    'EM_FirstName': str(row.EM_FirstName) if row.EM_FirstName else None,
+                    'EM_LastName': str(row.EM_LastName) if row.EM_LastName else None,
+                    'ODP_Actual_Clock_In': row.ODP_Actual_Clock_In,
+                    'ODP_Actual_Clock_Out': row.ODP_Actual_Clock_Out,
+                    'ODP_Shift_Clock_In': row.ODP_Shift_Clock_In,
+                    'ODP_Shift_Clock_Out': row.ODP_Shift_Clock_Out,
+                    'ODP_First_Hanger_Time': row.ODP_First_Hanger_Time,
+                    'ODP_Last_Hanger_Time': row.ODP_Last_Hanger_Time,
+                    'ODP_Current_Station': str(row.ODP_Current_Station) if row.ODP_Current_Station else None,
+                    'ODP_Lump_Sum_Payment': float(row.ODP_Lump_Sum_Payment) if row.ODP_Lump_Sum_Payment else 0.0,
+                    'ODP_Make_Up_Pay_Rate': float(row.ODP_Make_Up_Pay_Rate) if row.ODP_Make_Up_Pay_Rate else 0.0,
+                    'ODP_Last_Hanger_Start_Time': row.ODP_Last_Hanger_Start_Time,
+                    'ODPD_Key': str(row.ODPD_Key) if row.ODPD_Key else None,
+                    'ODPD_Workstation': str(row.ODPD_Workstation) if row.ODPD_Workstation else None,
+                    'ODPD_WC_Key': int(row.ODPD_WC_Key) if row.ODPD_WC_Key and str(row.ODPD_WC_Key).isdigit() else 0,
+                    'ODPD_Quantity': int(row.ODPD_Quantity) if row.ODPD_Quantity and str(row.ODPD_Quantity).isdigit() else 0,
+                    'ODPD_ST_Key': int(row.ODPD_ST_Key) if row.ODPD_ST_Key and str(row.ODPD_ST_Key).isdigit() else 0,
+                    'ST_ID': str(row.ST_ID) if row.ST_ID else None,
+                    'ST_Description': str(row.ST_Description) if row.ST_Description else None,
+                    'ODPD_Lot_Number': str(row.ODPD_Lot_Number) if row.ODPD_Lot_Number else None,
+                    'ODPD_OC_Key': int(row.ODPD_OC_Key) if row.ODPD_OC_Key and str(row.ODPD_OC_Key).isdigit() else 0,
+                    'OC_Description': str(row.OC_Description) if row.OC_Description else None,
+                    'Loading_Qty': int(row.Loading_Qty) if row.Loading_Qty and str(row.Loading_Qty).isdigit() else 0,
+                    'UnLoading_Qty': int(row.UnLoading_Qty) if row.UnLoading_Qty and str(row.UnLoading_Qty).isdigit() else 0,
+                    'OC_Piece_Rate': float(row.OC_Piece_Rate) if row.OC_Piece_Rate else 0.0,
+                    'OC_Standard_Time': float(row.OC_Standard_Time) if row.OC_Standard_Time else 0.0,
+                    'ODPD_Standard': float(row.ODPD_Standard) if row.ODPD_Standard else 0.0,
+                    'ODPD_Actual_Time': float(row.ODPD_Actual_Time) if row.ODPD_Actual_Time else 0.0,
+                    'ODPD_PA_Key': int(row.ODPD_PA_Key) if row.ODPD_PA_Key and str(row.ODPD_PA_Key).isdigit() else 0,
+                    'ODPD_Pay_Rate': float(row.ODPD_Pay_Rate) if row.ODPD_Pay_Rate else 0.0,
+                    'ODPD_Piece_Rate': float(row.ODPD_Piece_Rate) if row.ODPD_Piece_Rate else 0.0,
+                    'ODPD_Start_Time': row.ODPD_Start_Time,
+                    'ODPD_CM_Key': int(row.ODPD_CM_Key) if row.ODPD_CM_Key and str(row.ODPD_CM_Key).isdigit() else 0,
+                    'CM_Description': str(row.CM_Description) if row.CM_Description else None,
+                    'ODPD_SM_Key': int(row.ODPD_SM_Key) if row.ODPD_SM_Key and str(row.ODPD_SM_Key).isdigit() else 0,
+                    'SM_Description': str(row.SM_Description) if row.SM_Description else None,
+                    'ODPD_Normal_Pay_Factor': float(row.ODPD_Normal_Pay_Factor) if row.ODPD_Normal_Pay_Factor else 0.0,
+                    'ODPD_Is_Overtime': bool(row.ODPD_Is_Overtime) if row.ODPD_Is_Overtime is not None else False,
+                    'ODPD_Overtime_Factor': float(row.ODPD_Overtime_Factor) if row.ODPD_Overtime_Factor else 0.0,
+                    'ODPD_Edited_By': str(row.ODPD_Edited_By) if row.ODPD_Edited_By else None,
+                    'ODPD_Edited_Date': row.ODPD_Edited_Date,
+                    'ODPD_Actual_Time_From_Reader': float(row.ODPD_Actual_Time_From_Reader) if row.ODPD_Actual_Time_From_Reader else 0.0,
+                    'ODPD_STPO_Key': int(row.ODPD_STPO_Key) if row.ODPD_STPO_Key and str(row.ODPD_STPO_Key).isdigit() else 0,
+                    'created_at': row.created_at,
+                    'source_connection': connection_id
                     })
                 
                 # Validate batch data
                 validated_batch = validate_data(batch)
                 logger.info(f"[{connection_id}] Validated {len(validated_batch)} transactions in current batch")
-                
-                # Yield the batch for processing
                 yield validated_batch
-                
-                # Memory cleanup after processing batch
-                del batch, validated_batch, rows
-                check_memory_and_cleanup(f"{connection_id} - After processing batch {batch_count}")
-                
+            
         logger.info(f"[{connection_id}] Finished fetching {rows_fetched} rows in {time.time() - start_time:.2f} seconds")
         
     except Exception as e:
@@ -504,7 +453,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
 @retry_on_exception()
 def save_to_postgres(connection_id: str) -> str:
     """
-    Save transactions to PostgreSQL database with optimized memory management.
+    Save transactions to PostgreSQL database in a streaming fashion.
     
     Args:
         connection_id (str): Source connection identifier
@@ -525,12 +474,8 @@ def save_to_postgres(connection_id: str) -> str:
         Session = sessionmaker(bind=engine)
         session = Session()
         
-        # Process data in streaming fashion with memory optimization
-        batch_count = 0
+        # Process data in streaming fashion
         for batch in fetch_data_from_source(connection_id):
-            batch_count += 1
-            logger.info(f"[{connection_id}] Processing batch {batch_count}")
-            
             if batch:  # Only update last_extract_dt if we have data
                 # Get last extract datetime from current batch
                 batch_last_extract_dt = (
@@ -540,10 +485,10 @@ def save_to_postgres(connection_id: str) -> str:
                 if batch_last_extract_dt and (not last_extract_dt or batch_last_extract_dt > last_extract_dt):
                     last_extract_dt = batch_last_extract_dt
             
-            # Process in smaller sub-batches for better memory management
-            sub_batch_size = min(500, BATCH_SIZE // 2)  # Smaller sub-batches
-            for i in range(0, len(batch), sub_batch_size):
-                sub_batch = batch[i:i + sub_batch_size]
+            # Batch insert for better performance
+            batch_size = 1000
+            for i in range(0, len(batch), batch_size):
+                sub_batch = batch[i:i + batch_size]
                 batch_objects = []
                 
                 for transaction_data in sub_batch:
@@ -555,37 +500,20 @@ def save_to_postgres(connection_id: str) -> str:
                         continue
                         
                 try:
-                    if batch_objects:  # Only commit if we have objects
-                        session.add_all(batch_objects)
-                        session.commit()
-                        saved_count += len(batch_objects)
-                        logger.info(f"[{connection_id}] Saved {len(batch_objects)} records in current sub-batch - {saved_count} total records saved so far")
-                        
-                        # Memory cleanup after each sub-batch
-                        session.expunge_all()  # Remove objects from session to free memory
-                        del batch_objects
-                        
-                        # Check memory usage periodically
-                        if saved_count % (sub_batch_size * 5) == 0:
-                            check_memory_and_cleanup(f"{connection_id} - After saving {saved_count} records")
-                            
+                    session.add_all(batch_objects)
+                    session.commit()
+                    saved_count += len(batch_objects)
+                    logger.info(f"[{connection_id}] Saved {len(batch_objects)} records in current sub-batch - {saved_count} total records saved so far")
                 except Exception as e:
                     session.rollback()
                     logger.error(f"Error saving sub-batch: {e}")
                     raise
                 
-                # Explicit cleanup
-                del sub_batch
-                
-            # Memory cleanup after each batch
-            del batch
-            check_memory_and_cleanup(f"{connection_id} - After processing batch {batch_count}")
-            
         process_end_time = pendulum.now("Asia/Karachi")
         logger.info(f"[{connection_id}] Successfully saved {saved_count} transactions in {time.time() - start_time:.2f} seconds")
         
         # Log successful completion
-        if saved_count > 0:
+        if saved_count > 0 :
             insert_etl_log(
                 str(uuid.uuid4()),
                 connection_id,
@@ -619,8 +547,6 @@ def save_to_postgres(connection_id: str) -> str:
         if 'session' in locals():
             session.close()
         engine.dispose()
-        # Final memory cleanup
-        perform_memory_cleanup()
         
     return f"Saved {saved_count} rows for {connection_id}"
 
@@ -637,17 +563,17 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_hanger_lines_dynamic",
+    dag_id="etl_hanger_lines_21_22_23",
     default_args=default_args,
     schedule="*/30 * * * *",  # Every 30 minutes
     tags=["ssg", "line", "to-pg-ssg"],
     catchup=False,
     max_active_runs=1,
-    description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Optimized)",
+    description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL",
 )
-def dynamic_hanger_db_etl_optimized():
+def dynamic_hanger_db_etl():
     """
-    Dynamic ETL DAG for Hanger lines data with optimized memory handling.
+    Dynamic ETL DAG for Hanger lines data.
     
     This DAG dynamically creates tasks for each data source defined in DATA_SOURCES_NAMES.
     For each source, it:
@@ -678,7 +604,7 @@ def dynamic_hanger_db_etl_optimized():
             conn_str = build_mssql_conn_str(connection)
             
             if last_extract_dt:
-                logger.info(f"[{connection_id}] last extract datetime: {last_extract_dt}")
+                logger.info(f"[{connection_id}] LAST EXTRACT DATETIME: {last_extract_dt}")
                 logger.info(f"[{connection_id}] Found last extract: {last_extract_dt} → Checking for new data")
                 # Check if there's new data since last extract
                 with pyodbc.connect(conn_str) as connection:
@@ -815,7 +741,7 @@ def dynamic_hanger_db_etl_optimized():
     
     # Create tasks for each data source
     save_tasks = []
-    for conn_id in SOURCE_HANGER_LANE_25_TO_29:
+    for conn_id in SOURCE_LINE_21_22_23:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
         # task_id_suffix = 'dynamic'
@@ -849,8 +775,8 @@ def dynamic_hanger_db_etl_optimized():
     # else:
     #     start >> transform_task >> end
     
-    return dynamic_hanger_db_etl_optimized
+    return dynamic_hanger_db_etl
 
 
 # Create the DAG instance
-dag = dynamic_hanger_db_etl_optimized()
+dag = dynamic_hanger_db_etl()

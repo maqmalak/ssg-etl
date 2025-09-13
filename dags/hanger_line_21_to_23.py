@@ -107,9 +107,10 @@ def get_postgres_engine():
         connection = BaseHook.get_connection("pg-ssg")
         uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     except Exception as e:
+        connection = BaseHook.get_connection("pg-ssg")
         logger.warning(f"Could not get pg-ssg connection, using default values: {e}")
         # Fallback to default values for testing
-        uri = "postgresql://postgres:P@akistan12@172.16.7.6:5432/ssg"
+        uri = f"postgresql://{connection.login}:{connection.password}@{connection.host}:{connection.port}/{connection.schema}"
     
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(

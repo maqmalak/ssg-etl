@@ -66,7 +66,7 @@ def stream_data():
 with DAG('user_automation',
          default_args=default_args,
          schedule="1 * * * *",
-         tags=["ssg", "api-getdata"],
+         tags=["test", "api-getdata","example"],
          catchup=False) as dag:
 
     streaming_task = PythonOperator(

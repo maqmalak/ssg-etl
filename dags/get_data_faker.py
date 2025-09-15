@@ -61,7 +61,7 @@ default_args = {
     dag_id='sales_data_etl',
     default_args=default_args,
     schedule="*/1 * * * *",  # Run 1 minus
-    tags=["ssg", "sales"],
+    tags=["test", "faker", "example"],
     catchup=False,
 )
 def sales_data():

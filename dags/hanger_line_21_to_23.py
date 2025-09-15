@@ -687,12 +687,14 @@ default_args = {
 @dag(
     dag_id="etl_hanger_lines_21-22-23",
     default_args=default_args,
-    schedule="* 1/10 * * *",  # Every 30 minutes
-    tags=["ssg", "line", "to-pg-ssg"],
+    schedule=timedelta(minutes=10),
+    start_date=datetime(2025, 4, 1, 2, 10),  # First run at 2:10 AM
+    tags=["ssg", "line", "21-to-23"],
     catchup=False,
     max_active_runs=1,
     description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Working)",
 )
+
 def dynamic_hanger_db_etl_working():
     """
     Dynamic ETL DAG for Hanger lines data with proper error handling.

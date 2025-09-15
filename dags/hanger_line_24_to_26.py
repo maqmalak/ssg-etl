@@ -687,8 +687,9 @@ default_args = {
 @dag(
     dag_id="etl_hanger_line_24-25-26",
     default_args=default_args,
-    schedule="* 1/20  * * *",  # Every 30 minutes
-    tags=["ssg", "line", "to-pg-ssg"],
+    schedule=timedelta(minutes=10),
+    start_date=datetime(2025, 4, 1, 2, 20),  # First run at 2:20 AM
+    tags=["ssg", "line", "24-to-26"],
     catchup=False,
     max_active_runs=1,
     description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Working)",

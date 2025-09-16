@@ -18,6 +18,15 @@ from pendulum import timezone
 scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
 sys.path.append(os.path.abspath(scripts_path))
 
+from scripts.create_target_production_table_pg import (
+    create_target_table_if_not_exists,
+    create_etl_log_odp_table_if_not_exists,
+    OdpDateOc,
+    OdpDateShift,
+    OdpDateEmployee
+)
+
+
 # Import functions from hanger_line_transform.py
 try:
     from sparkFiles.hangerline_transform_optimized import (
@@ -39,9 +48,9 @@ logger.setLevel(logging.INFO)
 class ETLConfig:
     def __init__(self):
         # Original attributes for DAG functionality
-        self.data_freshness_threshold_hours = int(os.getenv('DATA_FRESHNESS_THRESHOLD', '48'))
+        self.data_freshness_threshold_hours = int(os.getenv('DATA_FRESHNESS_THRESHOLD', '24'))
         self.min_records_threshold = int(os.getenv('MIN_RECORDS_THRESHOLD', '100'))
-        self.check_recent_days = int(os.getenv('CHECK_RECENT_DAYS', '2'))
+        self.check_recent_days = int(os.getenv('CHECK_CURRENT_DAYS', '1'))
         self.max_retry_attempts = int(os.getenv('MAX_RETRY_ATTEMPTS', '3'))
         
         # Additional attributes for Spark functionality (matching sparkFiles/hangerline_transform_optimized.py)
@@ -66,7 +75,7 @@ class ETLConfig:
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
-    'start_date': datetime(2025, 8, 22, tzinfo=PKT),
+    'start_date': datetime(2025, 9, 15, tzinfo=PKT),
     'retries': 2,
     'retry_delay': timedelta(minutes=5),
     'execution_timeout': timedelta(hours=3),
@@ -131,6 +140,10 @@ def get_database_connection():
         logger.error(f"Database connection failed: {e}")
         raise
 
+# Create tables if they don't exist - this will be handled within DAG tasks, not at module level
+
+
+
 def check_for_data_enhanced(**context):
     """
     Enhanced data check with quality metrics and proper validation
@@ -157,7 +170,9 @@ def check_for_data_enhanced(**context):
                     MIN("created_at") as oldest_record,
                     COUNT(DISTINCT "ODP_Date") as date_count
                 FROM operator_daily_performance 
-                WHERE "created_at" >= CURRENT_DATE - INTERVAL '%(days)s days'
+                WHERE "ODP_Date" = (
+                           DATE_TRUNC('day', NOW() - INTERVAL '8 hours') - INTERVAL '%(days)s days'
+                    )::DATE
             """, {'days': config.check_recent_days})
             
             result = cursor.fetchone()
@@ -273,12 +288,12 @@ def execute_transformation_optimized(**context):
 
 # Define the DAG
 dag = DAG(
-    'hanger_line_daily_transform_optimized',
+    dag_id='hanger_line_daily_transform_optimized',
     default_args=default_args,
     description='Daily transformation of hanger line data with ETL best practices',
     schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
     catchup=False,
-    tags=['ssg', 'hanger_line', 'transformation', 'optimized'],
+    tags=['ssg', 'line', 'transformation', 'optimized'],
     max_active_runs=1,
     # Add SLA for monitoring
     sla_miss_callback=lambda context: logger.error(f"SLA missed for DAG: {context}")

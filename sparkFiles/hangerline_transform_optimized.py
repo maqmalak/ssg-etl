@@ -22,13 +22,21 @@ print(f"Python path: {sys.path}")
 print(f"DAGs path exists: {os.path.exists(dags_path)}")
 print(f"db_utils.py exists: {os.path.exists(os.path.join(dags_path, 'db_utils.py'))}")
 
+from scripts.create_target_production_table_pg import (
+    create_target_table_if_not_exists,
+    create_etl_log_odp_table_if_not_exists
+)
+
 try:
+    from pyspark.sql import functions as F
     from pyspark.sql import SparkSession
     from pyspark.sql.functions import (
         sum as spark_sum, count, max as spark_max, min as spark_min,
         current_date, date_sub, current_timestamp, lit, when, col
     )
-    from pyspark.sql.types import IntegerType
+    from pyspark.sql.types import (
+        StructType, StructField, StringType, IntegerType, DoubleType, DateType
+    )
     print("Successfully imported PySpark modules")
 except ImportError as e:
     print(f"Error importing PySpark modules: {e}")
@@ -292,45 +300,201 @@ def perform_aggregations_optimized(df):
     logger.info("Performing optimized aggregations...")
     
     try:
+        # Check if DataFrame is empty
+        record_count = df.count()
+        if record_count == 0:
+            logger.info("No records to aggregate. Returning empty DataFrames.")
+            # Return empty DataFrames with proper schema
+            from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, DateType, BooleanType
+            from pyspark.sql import SparkSession
+            
+            # Create empty DataFrames with appropriate schemas
+            spark = SparkSession.builder.getOrCreate()
+            
+            # Schema for aggregation 1
+            schema1 = StructType([
+                StructField("ODP_Date", DateType(), True),
+                StructField("Shift", StringType(), True),
+                StructField("ODPD_ST_Key", IntegerType(), True),
+                StructField("ST_ID", StringType(), True),
+                StructField("ST_Description", StringType(), True),
+                StructField("ODPD_Lot_Number", StringType(), True),
+                StructField("ODPD_OC_Key", StringType(), True),
+                StructField("OC_Description", StringType(), True),
+                StructField("OC_Standard_Time", DoubleType(), True),  # assuming numeric
+                StructField("ODPD_Actual_Time", DoubleType(), True),   # assuming numeric
+                StructField("ODPD_CM_Key", StringType(), True),
+                StructField("CM_Description", StringType(), True),
+                StructField("ODPD_SM_Key", IntegerType(), True),
+                StructField("SM_Description", StringType(), True),
+                StructField("source_connection", StringType(), True),
+                # Aggregated fields
+                StructField("ODPD_Quantity", DoubleType(), True),
+                StructField("Loading_Qty", DoubleType(), True),
+                StructField("UnLoading_Qty", DoubleType(), True),
+                StructField("record_count", IntegerType(), True)
+            ])
+            aggregated_df1 = spark.createDataFrame([], schema1)
+            
+            # Schema for aggregation 2
+            schema2 = StructType([
+                # Grouping columns (dimensions)
+                StructField("ODP_Date", DateType(), True),
+                StructField("Shift", StringType(), True),
+                StructField("ODPD_ST_Key", IntegerType(), True),
+                StructField("ST_ID", StringType(50), True),
+                StructField("ST_Description", StringType(100), True),
+                StructField("ODPD_Lot_Number", StringType(50), True),
+                StructField("ODPD_OC_Key", IntegerType(), True),
+                StructField("OC_Description", StringType(100), True),
+                StructField("OC_Standard_Time", DoubleType(), True),  # Numeric(10,2) → DoubleType
+                StructField("ODPD_Actual_Time", DoubleType(), True),   # Numeric(10,2) → DoubleType
+                StructField("ODPD_CM_Key", IntegerType(), True),
+                StructField("CM_Description", StringType(100), True),
+                StructField("ODPD_SM_Key", IntegerType(), True),
+                StructField("SM_Description", StringType(100), True),
+                StructField("ODPD_Is_Overtime", BooleanType(), True),
+                StructField("ODPD_Overtime_Factor", DoubleType(), True),
+                StructField("ODPD_STPO_Key", IntegerType(), True),
+                StructField("source_connection", StringType(50), True),
+                # Aggregated measures
+                StructField("ODPD_Quantity", IntegerType(), True),     # sum → still integer if input was
+                StructField("Loading_Qty", IntegerType(), True),
+                StructField("UnLoading_Qty", IntegerType(), True),
+                StructField("record_count", IntegerType(), True)       # count → always integer
+            ])
+            aggregated_df2 = spark.createDataFrame([], schema2)
+            
+
+            # Schema for aggregation 3
+            schema3 = StructType([
+                # Grouping Dimensions
+                StructField("ODP_Date", DateType(), True),
+                StructField("Shift", StringType(), True),
+                StructField("ODP_EM_Key", IntegerType(), True),
+                StructField("EM_RFID", StringType(), True),
+                StructField("EM_Department", StringType(), True),
+                StructField("EM_FirstName", StringType(), True),
+                StructField("EM_LastName", StringType(), True),
+                StructField("ODP_Current_Station", StringType(), True),
+                StructField("ODPD_Workstation", StringType(), True),
+                StructField("ODPD_WC_Key", IntegerType(), True),
+                StructField("ODPD_ST_Key", IntegerType(), True),
+                StructField("ST_ID", StringType(), True),
+                StructField("ST_Description", StringType(), True),
+                StructField("ODPD_Lot_Number", StringType(), True),
+                StructField("ODPD_OC_Key", IntegerType(), True),
+                StructField("OC_Description", StringType(), True),
+                StructField("ODPD_CM_Key", IntegerType(), True),
+                StructField("CM_Description", StringType(), True),
+                StructField("ODPD_SM_Key", IntegerType(), True),
+                StructField("SM_Description", StringType(), True),
+                StructField("source_connection", StringType(), True),
+                # Aggregated Measures
+                StructField("ODPD_Quantity", IntegerType(), True),
+                StructField("Loading_Qty", IntegerType(), True),
+                StructField("UnLoading_Qty", IntegerType(), True),
+                StructField("OC_Standard_Time", DoubleType(), True),      # avg → Double
+                StructField("ODPD_Actual_Time", DoubleType(), True),      # avg → Double
+                StructField("ODPD_Is_Overtime", BooleanType(), True),     # max → Boolean
+                StructField("ODPD_Overtime_Factor", DoubleType(), True),  # avg → Double
+                StructField("record_count", IntegerType(), True),
+                # Time aggregations (optional)
+                StructField("first_clock_in", TimestampType(), True),
+                StructField("last_clock_out", TimestampType(), True)
+            ])
+            aggregated_df3 = spark.createDataFrame([], schema3)
+
+
+
+            agg_results = {
+                'odp_date_oc': aggregated_df1,
+                'odp_date_shift': aggregated_df2,
+                'odp_date_employee': aggregated_df3
+            }
+            
+            for name, agg_df in agg_results.items():
+                logger.info(f"Aggregation {name} completed with 0 records")
+            
+            return agg_results
+        
         # Cache the DataFrame for multiple operations
         df.cache()
         logger.info("Source DataFrame cached for performance")
         
         # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
         logger.info("Performing aggregation 1: by Date and Operation Code...")
-        aggregated_df1 = df.groupBy("ODP_Date", "OC_Description", "source_connection") \
-            .agg(
-                spark_sum("ODPD_Quantity").alias("ODPD_Quantity"),
-                count("*").alias("record_count")
-            )
+        aggregated_df1 = df.groupBy(
+            "ODP_Date", "Shift", "ODPD_ST_Key", "ST_ID", "ST_Description",
+            "ODPD_Lot_Number", "ODPD_OC_Key", "OC_Description",
+            "OC_Standard_Time", "ODPD_Actual_Time", "ODPD_CM_Key",
+            "CM_Description", "ODPD_SM_Key", "SM_Description", "source_connection"
+        ).agg(
+            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
+            F.sum("Loading_Qty").alias("Loading_Qty"),
+            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
+            F.count("*").alias("record_count")
+        )
         
         # Transform 2: Group by ODP_Date and Shift, sum ODPD_Quantity
-        logger.info("Performing aggregation 2: by Date and Shift...")
-        aggregated_df2 = df.groupBy("ODP_Date", "Shift", "source_connection") \
-            .agg(
-                spark_sum("ODPD_Quantity").alias("ODPD_Quantity"),
-                count("*").alias("record_count")
-            )
-        
+        logger.info("Performing aggregation 3: by Date and Employee...")        
+        # Group by descriptive/dimensional columns
+        grouping_columns_db2 = [
+            "ODP_Date", "Shift", "ODPD_ST_Key", "ST_ID", "ST_Description",
+            "ODPD_Lot_Number", "ODPD_OC_Key", "OC_Description",
+            "OC_Standard_Time", "ODPD_Actual_Time", "ODPD_CM_Key",
+            "CM_Description", "ODPD_SM_Key", "SM_Description","ODPD_STPO_Key", "source_connection"
+        ]
+
+        # Aggregate additive measures
+        aggregated_df2 = df.groupBy(*grouping_columns_db2).agg(
+            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
+            F.sum("Loading_Qty").alias("Loading_Qty"),
+            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
+            F.avg("ODPD_Overtime_Factor").alias("ODPD_Overtime_Factor"),
+            F.max("ODPD_Is_Overtime").alias("ODPD_Is_Overtime"),  # e.g., if any row had overtime
+            F.count("*").alias("record_count")  # optional: track number of original rows
+        )
         # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
         logger.info("Performing aggregation 3: by Date and Employee...")
-        aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", 
-                                   "EM_FirstName", "EM_LastName", "source_connection") \
-            .agg(
-                spark_sum("ODPD_Quantity").alias("ODPD_Quantity"),
-                count("*").alias("record_count")
-            )
-        
+        grouping_cols = [
+            "ODP_Date", "Shift",
+            "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName",
+            "ODP_Current_Station", "ODPD_Workstation", "ODPD_WC_Key",
+            "ODPD_ST_Key", "ST_ID", "ST_Description", "ODPD_Lot_Number",
+            "ODPD_OC_Key", "OC_Description","OC_Standard_Time",
+            "ODPD_CM_Key", "CM_Description", "ODPD_SM_Key", "SM_Description",
+            "source_connection"
+        ]        
+
+        # Optional: Also aggregate time fields (min clock-in, max clock-out)
+        aggregated_df3 = df.groupBy(*grouping_cols).agg(
+            # Sum production quantities
+            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
+            F.sum("Loading_Qty").alias("Loading_Qty"),
+            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
+            F.sum("ODPD_Actual_Time").alias("ODPD_Actual_Time"),
+            # Overtime flags — take MAX (if any record had overtime)
+            F.max("ODPD_Is_Overtime").alias("ODPD_Is_Overtime"),
+            F.avg("ODPD_Overtime_Factor").alias("ODPD_Overtime_Factor"),
+            # Track number of records aggregated
+            F.count("*").alias("record_count"),
+            # Optional: capture time range
+            F.min("ODP_Actual_Clock_In").alias("first_clock_in"),
+            F.max("ODP_Actual_Clock_Out").alias("last_clock_out")
+        )
+
+
         # Validate aggregation results
         agg_results = {
-            'opd_date_oc': aggregated_df1,
-            'opd_date_shift': aggregated_df2,
-            'opd_date_employee': aggregated_df3
+            'odp_date_oc': aggregated_df1,
+            'odp_date_shift': aggregated_df2,
+            'odp_date_employee': aggregated_df3
         }
         
         for name, agg_df in agg_results.items():
-            count = agg_df.count()
-            logger.info(f"Aggregation {name} completed with {count} records")
+            record_count = agg_df.count()
+            logger.info(f"Aggregation {name} completed with {record_count} records")
             
         # Uncache the source DataFrame
         df.unpersist()
@@ -353,8 +517,14 @@ def save_with_upsert_enhanced(df, table_name: str, jdbc_url: str, jdbc_propertie
         jdbc_url: JDBC URL
         jdbc_properties: JDBC properties
     """
+    record_count = df.count()
     logger.info(f"Saving data to table: {table_name}")
-    logger.info(f"DataFrame row count: {df.count()}")
+    logger.info(f"DataFrame row count: {record_count}")
+    
+    # Handle empty DataFrames
+    if record_count == 0:
+        logger.info(f"No records to save to {table_name}. Skipping save operation.")
+        return
     
     try:
         # Add ETL metadata
@@ -427,6 +597,7 @@ def transform_data_optimized(spark):
         logger.info("Getting PostgreSQL connection parameters...")
         try:
             postgres_connection_params = get_postgres_connection_params("pg-ssg")
+            
         except Exception as e:
             logger.warning(f"Error getting connection params from db_utils: {e}")
             logger.info("Using fallback method with environment variables...")
@@ -451,6 +622,15 @@ def transform_data_optimized(spark):
             logger.warning(f"Data quality issues detected: {quality_report['issues']}")
             # For critical issues, you might want to stop processing
             # For now, we'll continue but log the warnings
+            
+        # Check if we have any records before proceeding
+        record_count = df.count()
+        if record_count == 0:
+            logger.info("No records to process. Skipping aggregation and save steps.")
+            # Log ETL metrics with 0 records
+            log_etl_metrics(start_time, 0, [])
+            logger.info("Optimized data transformation completed successfully (no data to process)")
+            return True
         
         # Perform aggregations
         aggregated_dfs = perform_aggregations_optimized(df)

@@ -279,9 +279,9 @@ def transform_data(spark):
         # Save the results to their respective tables
         print("Saving aggregated data...")
         try:
-            save_with_update_insert(aggregated_df1, "opd_date_oc", postgres_jdbc_url, postgres_jdbc_properties)
-            save_with_update_insert(aggregated_df2, "opd_date_shift", postgres_jdbc_url, postgres_jdbc_properties)
-            save_with_update_insert(aggregated_df3, "opd_date_employee", postgres_jdbc_url, postgres_jdbc_properties)
+            save_with_update_insert(aggregated_df1, "odp_date_oc", postgres_jdbc_url, postgres_jdbc_properties)
+            save_with_update_insert(aggregated_df2, "odp_date_shift", postgres_jdbc_url, postgres_jdbc_properties)
+            save_with_update_insert(aggregated_df3, "odp_date_employee", postgres_jdbc_url, postgres_jdbc_properties)
         except Exception as e:
             print(f"Error saving aggregated data: {str(e)}")
             return False
@@ -290,9 +290,9 @@ def transform_data(spark):
             record_count1 = aggregated_df1.count()
             record_count2 = aggregated_df2.count()
             record_count3 = aggregated_df3.count()
-            print(f"Successfully transformed and saved {record_count1} records to opd_date_oc table")
-            print(f"Successfully transformed and saved {record_count2} records to opd_date_shift table")
-            print(f"Successfully transformed and saved {record_count3} records to opd_date_employee table")
+            print(f"Successfully transformed and saved {record_count1} records to odp_date_oc table")
+            print(f"Successfully transformed and saved {record_count2} records to odp_date_shift table")
+            print(f"Successfully transformed and saved {record_count3} records to odp_date_employee table")
         except Exception as e:
             print(f"Error counting saved records: {str(e)}")
         

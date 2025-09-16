@@ -19,7 +19,7 @@ start_task → check_data_task → [has_data_label → transform_task → save_t
 
 ## Aggregated Tables Structure
 
-### 1. `opd_date_oc` - Operation Code Summary
+### 1. `odp_date_oc` - Operation Code Summary
 **Purpose**: Daily summary by operation type
 **Primary Key**: (ODP_Date, OC_Description, source_connection)
 **Columns**:
@@ -28,7 +28,7 @@ start_task → check_data_task → [has_data_label → transform_task → save_t
 - ODPD_Quantity (Integer) - Total quantity processed
 - source_connection (String) - Source line identifier
 
-### 2. `opd_date_shift` - Shift Summary
+### 2. `odp_date_shift` - Shift Summary
 **Purpose**: Daily summary by work shift
 **Primary Key**: (ODP_Date, Shift, source_connection)
 **Columns**:
@@ -37,7 +37,7 @@ start_task → check_data_task → [has_data_label → transform_task → save_t
 - ODPD_Quantity (Integer) - Total quantity processed
 - source_connection (String) - Source line identifier
 
-### 3. `opd_date_employee` - Employee Summary
+### 3. `odp_date_employee` - Employee Summary
 **Purpose**: Daily summary by employee
 **Primary Key**: (ODP_Date, ODP_EM_Key, source_connection)
 **Columns**:

@@ -62,57 +62,9 @@ class HangerLaneData(Base):
     source_connection = Column(String(50))
 
 
-class OpdDateShift(Base):
-    __tablename__ = 'opd_date_shift'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ODP_Date = Column(Date, nullable=False)
-    Shift = Column(String(10), nullable=False)
-    ODPD_Quantity = Column(Integer)
-    source_connection = Column(String(50), nullable=False)
-    
-    # Composite primary key
-    __table_args__ = (
-        PrimaryKeyConstraint('ODP_Date', 'Shift', 'source_connection'),
-    )
-
-
-class OpdDateOc(Base):
-    __tablename__ = 'opd_date_oc'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ODP_Date = Column(Date, nullable=False)
-    OC_Description = Column(String(100), nullable=False)
-    ODPD_Quantity = Column(Integer)
-    source_connection = Column(String(50), nullable=False)
-    
-    # Composite primary key
-    __table_args__ = (
-        PrimaryKeyConstraint('ODP_Date', 'OC_Description', 'source_connection'),
-    )
-
-
-class OpdDateEmployee(Base):
-    __tablename__ = 'opd_date_employee'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ODP_Date = Column(Date, nullable=False)
-    ODP_EM_Key = Column(Integer, nullable=False)
-    EM_RFID = Column(String(50))
-    EM_Department = Column(String(50))
-    EM_FirstName = Column(String(50))
-    EM_LastName = Column(String(50))
-    ODPD_Quantity = Column(Integer)
-    source_connection = Column(String(50), nullable=False)
-    
-    # Composite primary key
-    __table_args__ = (
-        PrimaryKeyConstraint('ODP_Date', 'ODP_EM_Key', 'source_connection'),
-    )
-
 
 def create_etl_log_table_if_not_exists(engine):
-    """Create ETL log table if it doesn't exist."""
+    """Create ETL aggregated OPD_Date base data log table if it doesn't exist."""
     meta = MetaData()
     log_table = Table(
         'etl_extract_log', meta,

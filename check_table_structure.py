@@ -42,7 +42,7 @@ def check_table_structure():
         conn = get_database_connection()
         cursor = conn.cursor()
         
-        tables = ['opd_date_oc', 'opd_date_shift', 'opd_date_employee']
+        tables = ['odp_date_oc', 'odp_date_shift', 'odp_date_employee', 'odp_date_oc_staging']
         
         for table in tables:
             try:

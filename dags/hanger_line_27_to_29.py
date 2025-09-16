@@ -687,8 +687,8 @@ default_args = {
 @dag(
     dag_id="etl_hanger_lines_27-28-29",
     default_args=default_args,
-    # schedule=timedelta(minutes=10),
-    schedule='6,16,36,46,56 * * * *',
+    schedule=timedelta(minutes=30),
+    # schedule='6,16,36,46,56 * * * *',
     start_date=datetime(2025, 4, 1, 2, 30),  # First run at 2:30 AM
     tags=["ssg", "line", "27-to-29"],
     catchup=False,

@@ -16,9 +16,9 @@ The optimized hanger_line_daily_transform ETL pipeline successfully transforms o
 ### Table Statistics
 | Table | Records | Unique Dates | Key Dimensions | Total Quantity | Data Freshness |
 |-------|---------|-------------|----------------|----------------|----------------|
-| `opd_date_oc` | 687 | 2 | 357 operations, 5 lines | 418,462 | Today (0 days) |
-| `opd_date_shift` | 20 | 2 | 2 shifts, 5 lines | 418,462 | Today (0 days) |
-| `opd_date_employee` | 878 | 2 | 466 employees, 5 lines | 418,462 | Today (0 days) |
+| `odp_date_oc` | 687 | 2 | 357 operations, 5 lines | 418,462 | Today (0 days) |
+| `odp_date_shift` | 20 | 2 | 2 shifts, 5 lines | 418,462 | Today (0 days) |
+| `odp_date_employee` | 878 | 2 | 466 employees, 5 lines | 418,462 | Today (0 days) |
 
 ### Data Quality Metrics
 - ✅ **Zero Null Values**: All key columns populated
@@ -81,9 +81,9 @@ Source: operator_daily_performance (operational data)
 Processing: Spark-based aggregations
     ↓
 Targets:
-├── opd_date_oc (operation code summary)
-├── opd_date_shift (shift summary)  
-└── opd_date_employee (employee summary)
+├── odp_date_oc (operation code summary)
+├── odp_date_shift (shift summary)  
+└── odp_date_employee (employee summary)
     ↓
 Consumption: Business intelligence and operational dashboards
 ```

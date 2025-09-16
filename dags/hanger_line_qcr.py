@@ -31,26 +31,26 @@ from sqlalchemy.orm import sessionmaker
 
 
 
-# Import functions from hanger_line_transform.py
-try:
-    from sparkFiles.sparkProcess import (
-        create_spark_session,
-        transform_data
-    )
-    print("Successfully imported functions from hanger_line_transform.py")
-except ImportError as e:
-    print(f"Error importing functions from hanger_line_transform.py: {e}")
+# # Import functions from hanger_line_transform.py
+# try:
+#     from sparkFiles.sparkProcess import (
+#         create_spark_session,
+#         transform_data
+#     )
+#     print("Successfully imported functions from hanger_line_transform.py")
+# except ImportError as e:
+#     print(f"Error importing functions from hanger_line_transform.py: {e}")
 
 
 # Add the project root to the Python path for script imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Import the correct source constants
-from scripts.constans.db_sources import SOURCE_LINE_21_22_23 
-from scripts.create_target_pg_hl_table import (
-    HangerLaneData,
-    create_etl_log_table_if_not_exists,
-    create_table_if_not_exists
+from scripts.constans.db_sources import SOURCE_HANGER_LANE 
+from scripts.create_target_qcr_table import (
+QualityControlRepair,
+create_etl_log_qcr_table_if_not_exists,
+create_qcr_table_if_not_exists
 )
 
 
@@ -96,22 +96,33 @@ def check_memory_and_cleanup(operation: str) -> None:
         log_memory_usage(f"{operation} - After cleanup")
 
 
-def get_postgres_engine():
+# Global engine cache to reuse connections
+_engine_cache = {}
+
+def get_postgres_engine(connection_name: str = "pg-ssg"):
     """
     Create and return a PostgreSQL engine using Airflow connection.
+    Reuses existing engines when possible for better performance.
     
+    Args:
+        connection_name (str): Name of the Airflow connection to use
+        
     Returns:
         sqlalchemy.engine.Engine: PostgreSQL engine instance
     """
+    # Check if we already have an engine for this connection
+    if connection_name in _engine_cache:
+        return _engine_cache[connection_name]
+    
     try:
-        connection = BaseHook.get_connection("pg-ssg")
+        connection = BaseHook.get_connection(connection_name)
         # Properly encode the password to handle special characters like '@'
         from urllib.parse import quote_plus
         password = quote_plus(connection.password) if connection.password else ''
         uri = f"postgresql://{connection.login}:{password}@{connection.host}:{connection.port}/{connection.schema}"
         logger.info(f"Using Airflow connection: {connection.host}:{connection.port}/{connection.schema}")
     except Exception as e:
-        logger.warning(f"Could not get pg-ssg connection, using default values: {e}")
+        logger.warning(f"Could not get {connection_name} connection, using default values: {e}")
         # Fallback to default values for testing
         # Properly encode the password to handle special characters like '@'
         from urllib.parse import quote_plus
@@ -122,14 +133,30 @@ def get_postgres_engine():
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(
         uri,
-        pool_size=5,  # Reduced pool size to prevent resource exhaustion
-        max_overflow=10,
+        pool_size=10,  # Increased pool size for better concurrency
+        max_overflow=20,
         pool_pre_ping=True,
         pool_recycle=3600,
         pool_timeout=30,
         echo=False  # Disable SQL logging for performance
     )
+    
+    # Cache the engine for reuse
+    _engine_cache[connection_name] = engine
     return engine
+
+
+def dispose_postgres_engine(connection_name: str = "pg-ssg"):
+    """
+    Dispose of a PostgreSQL engine and remove it from the cache.
+    
+    Args:
+        connection_name (str): Name of the Airflow connection
+    """
+    if connection_name in _engine_cache:
+        _engine_cache[connection_name].dispose()
+        del _engine_cache[connection_name]
+        logger.info(f"Disposed PostgreSQL engine for connection: {connection_name}")
 
 
 def retry_on_exception(max_retries: int = MAX_RETRIES, delay: int = RETRY_DELAY):
@@ -174,14 +201,14 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
     Returns:
         Optional[datetime]: Last extract datetime or None if not found
     """
-    engine = get_postgres_engine()
+    engine = get_postgres_engine("pg-ssg")
     try:
         # Create the ETL log table if it doesn't exist
-        create_etl_log_table_if_not_exists(engine)
+        create_etl_log_qcr_table_if_not_exists(engine)
         with engine.connect() as conn:
             result = conn.execute(
                 text(
-                    "SELECT MAX(lastextractdatetime) FROM etl_extract_log WHERE status='Completed' and source_connection = :src"
+                    "SELECT MAX(lastextractdatetime) FROM etl_qcr_extract_log WHERE status='Completed' and source_connection = :src"
                 ),
                 {"src": source_connection},
             ).scalar()
@@ -192,7 +219,7 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
         # If we can't access the log table, return None to trigger full extraction
         return None
     finally:
-        engine.dispose()
+        dispose_postgres_engine("pg-ssg")
 
 
 def insert_etl_log(
@@ -220,14 +247,15 @@ def insert_etl_log(
         status (str): Status message
         errormessage (Optional[str]): Error message if any
     """
-    engine = get_postgres_engine()
+    engine = get_postgres_engine("pg-ssg")
     try:
-        create_etl_log_table_if_not_exists(engine)
+        # Create the ETL log table if it doesn't exist
+        create_etl_log_qcr_table_if_not_exists(engine)
         with engine.begin() as conn:
             conn.execute(
                 text(
                     """
-                    INSERT INTO etl_extract_log 
+                    INSERT INTO etl_qcr_extract_log 
                     (processlogid, source_connection, saved_count, starttime, endtime, lastextractdatetime, success, status, errormessage)
                     VALUES (:processlogid, :source_connection, :saved_count, :starttime, :endtime, :lastextractdatetime, :success, :status, :errormessage)
                     """
@@ -249,7 +277,7 @@ def insert_etl_log(
         logger.error(f"Failed to insert ETL log for {source_connection}: {e}")
         # Don't raise the exception, just log it
     finally:
-        engine.dispose()
+        dispose_postgres_engine("pg-ssg")
 
 
 def build_mssql_conn_str(connection) -> str:
@@ -290,7 +318,7 @@ def get_min_creation_date_from_source(conn_str: str) -> Optional[datetime]:
         logger.info(f"Attempting to connect to MSSQL source with connection string: {conn_str[:50]}...")  # Log first 50 chars for security
         with pyodbc.connect(conn_str) as connection:
             cursor = connection.cursor()
-            cursor.execute("SELECT MIN(created_at) FROM [IHS].[dbo].[ODP_Detail] ;")
+            cursor.execute("SELECT MIN(QCR_Defect_DateTime) FROM [IHS_SHARED].[dbo].[QC_Rework] WITH (NOLOCK);")
             result = cursor.fetchone()[0]
             logger.info(f"Min CreationDate from source: {result}")
             return result
@@ -309,20 +337,47 @@ def get_min_creation_date_from_source(conn_str: str) -> Optional[datetime]:
         return None
 
 
-def validate_data(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def validate_data(transactions: List[Dict[str, Any]], connection_id: str = "unknown") -> List[Dict[str, Any]]:
     """
     Validate and clean the extracted data.
     
     Args:
         transactions (List[Dict[str, Any]]): List of transaction records
+        connection_id (str): Source connection identifier for logging
         
     Returns:
         List[Dict[str, Any]]: Validated and cleaned transaction records
     """
-    # For now, just return all transactions as valid
-    # In a production environment, you would add validation logic here
-    logger.info(f"Validated {len(transactions)} out of {len(transactions)} transactions")
-    return transactions
+    validated_transactions = []
+    invalid_count = 0
+    
+    for transaction in transactions:
+        try:
+            # Basic validation checks
+            if not transaction.get('qcr_key'):
+                logger.warning(f"[{connection_id}] Skipping transaction with missing qcr_key: {transaction.get('qcr_key', 'unknown')}")
+                invalid_count += 1
+                continue
+                
+            # Check datetime fields
+            if not transaction.get('qcr_defect_datetime'):
+                logger.warning(f"[{connection_id}] Skipping transaction {transaction.get('qcr_key', 'unknown')} with missing qcr_defect_datetime")
+                invalid_count += 1
+                continue
+                
+            # Add source connection if missing
+            if 'source_connection' not in transaction:
+                transaction['source_connection'] = connection_id
+                
+            # Add any additional validation logic here as needed
+            validated_transactions.append(transaction)
+        except Exception as e:
+            logger.error(f"[{connection_id}] Error validating transaction {transaction.get('qcr_key', 'unknown')}: {e}")
+            invalid_count += 1
+            continue
+    
+    logger.info(f"[{connection_id}] Validated {len(validated_transactions)} out of {len(transactions)} transactions ({invalid_count} invalid)")
+    return validated_transactions
 
 
 @retry_on_exception()
@@ -350,7 +405,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
         connection = BaseHook.get_connection(connection_id)
         conn_str = build_mssql_conn_str(connection)
     except Exception as e:
-        logger.error(f"Could not get connection {connection_id}: {e}")
+        logger.error(f"[{connection_id}] Could not get connection: {e}")
         # If we can't get the connection, we can't fetch data
         return
     
@@ -362,177 +417,143 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
         else:
             logger.info(f"[{connection_id}] Could not get min CreationDate from source, fetching all data")
     
-    # Build query - FIXED: Removed extra commas in SELECT clause
+    # Build optimized query - Removed unnecessary columns and improved query performance
+    # Using specific column names instead of * for better performance
+    # Added query hints for better optimization
     query = """
         SELECT
-            [ODP_Date]
-            ,[ODP_Key]
-            ,CASE WHEN [ODP_Shift]=1 THEN 'Day' ELSE 'Night' END AS [Shift]
-            ,[ODP_EM_Key]
-            ,[EM_RFID]
-            ,[EM_Department]
-            ,[EM_FirstName]
-            ,[EM_LastName]
-            ,[ODP_Actual_Clock_In]
-            ,[ODP_Actual_Clock_Out]
-            ,[ODP_Shift_Clock_In]
-            ,[ODP_Shift_Clock_Out]
-            ,[ODP_First_Hanger_Time]
-            ,[ODP_Last_Hanger_Time]
-            ,[ODP_Current_Station]
-            ,[ODP_Lump_Sum_Payment]
-            ,[ODP_Make_Up_Pay_Rate]
-            ,[ODP_Last_Hanger_Start_Time]
-            ,[ODPD_Key]
-            ,[ODPD_Workstation]
-            ,[ODPD_WC_Key]
-            ,[ODPD_Quantity]
-            ,[ODPD_ST_Key]
-            ,[ST_ID]
-            ,[ST_Description]
-            ,[ODPD_Lot_Number]
-            ,[ODPD_OC_Key]
-            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN 'Loading' 
-                WHEN [OC_Description]='Pressing' THEN 'Un-Loading'
-            ELSE [OC_Description] END AS OC_Description
-            ,CASE WHEN [OC_Description]='Loading/Panel Segregation' THEN ODPD_Quantity ELSE 0 END AS Loading_Qty
-            ,CASE WHEN [OC_Description]='Pressing' THEN ODPD_Quantity ELSE 0 END AS UnLoading_Qty
-            ,[OC_Piece_Rate]
-            ,[OC_Standard_Time]
-            ,[ODPD_Standard]
-            ,ODPD_Actual_Time
-            ,[ODPD_PA_Key]
-            ,[ODPD_Pay_Rate]
-            ,[ODPD_Piece_Rate]
-            ,[ODPD_Start_Time]
-            ,[ODPD_CM_Key]
-            ,[CM_Description]
-            ,[ODPD_SM_Key]
-            ,[SM_Description]
-            ,[ODPD_Normal_Pay_Factor]
-            ,[ODPD_Is_Overtime]
-            ,[ODPD_Overtime_Factor]
-            ,[ODPD_Edited_By]
-            ,[ODPD_Edited_Date]
-            ,[ODPD_Actual_Time_From_Reader]
-            ,[ODPD_STPO_Key]
-            ,[created_at] as created_at
-        FROM [IHS].[dbo].[ODP_Detail] OD
-        INNER JOIN [IHS].[dbo].[ODP_Master] OM ON OD.[ODPD_ODP_Key] = OM.[ODP_Key]  
-        LEFT JOIN [IHS_SHARED].[dbo].[Employee_Master] EM   ON OM.[ODP_EM_Key]=EM.[EM_Key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Operation_Codes] OC   ON OD.[ODPD_OC_Key]=OC.[OC_Key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Size_Master] SM ON OD.[ODPD_SM_Key]=SM.[SM_Key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Colour_Master] CM ON OD.[ODPD_CM_Key]=CM.[CM_Key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Style_Master] ST ON OD.[ODPD_ST_Key]=ST.[ST_Key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Style_Planned_Orders] PO ON OD.[ODPD_STPO_Key]=PO.[STPO_Key]
+            QCR.QCR_Key,
+            QCR.QCR_STPO_Key,
+            QCR.QCR_Defect_DateTime,
+            CASE 
+            WHEN CAST(QCR.QCR_Defect_DateTime AS TIME) BETWEEN '08:00:00' AND '17:00:00' 
+            THEN 'A' 
+            ELSE 'B' 
+            END AS SHIFT,
+            QCR.QCR_Defect_EM_Key,
+            QCR.QCR_Defect_ST_Key,
+            QCR.QCR_Defect_OC_Key,
+            QCR.QCR_Sent_To_Rework_By_EM_Key,
+            QCR.QCR_Defect_Quantity,
+            QCR.QCR_From_QC_Station,
+            QCR.QCR_HM_ID,
+            QCR.QCR_QC_DateTime,
+            QCR.QCR_Repair_EM_Key,
+            QCR.QCR_Repair_DateTime,
+            QCR.QCR_Repair_Quantity,
+            QCR.QCR_Defect_CM_Key,
+            QCR.QCR_Defect_SM_Key,
+            QCR.QCR_QCSC_Key,
+            QCR.QCR_HM_Key,
+            QSC.QCSC_Description,
+            EM.EM_FirstName,
+            EM.EM_Key,
+            EM.EM_RFID,
+            ST.ST_ID,
+            ST.ST_Description,
+            SPO.STPO_ST_Key,
+            SPO.STPO_ID,
+            SPO.STPO_CI_Name
+        FROM
+            [IHS_SHARED].[dbo].QC_Rework QCR WITH (NOLOCK)
+            INNER JOIN [IHS_SHARED].[dbo].QC_Sub_Codes QSC WITH (NOLOCK) ON QCR.QCR_QCSC_Key = QSC.QCSC_Key
+            INNER JOIN [IHS_SHARED].[dbo].Employee_Master EM WITH (NOLOCK) ON QCR.QCR_Defect_EM_Key = EM.EM_Key
+            INNER JOIN [IHS_SHARED].[dbo].Style_Master ST WITH (NOLOCK) ON QCR.QCR_Defect_ST_Key = ST.ST_Key
+            INNER JOIN [IHS_SHARED].[dbo].Style_Planned_Orders SPO WITH (NOLOCK) ON QCR.QCR_STPO_Key = SPO.STPO_Key
         WHERE 1=1
     """
     
     params = []
     if last_extract_dt:
-        query += " AND OD.created_at > ?"
+        query += " AND QCR.QCR_Defect_DateTime > ?"
         params = [last_extract_dt]
         
-    query += " ORDER BY OD.created_at ASC;"
+    query += " ORDER BY QCR.QCR_Defect_DateTime ASC"
     
-    # Execute query
+    # Execute query with optimized pagination
     try:
-        with pyodbc.connect(conn_str, autocommit=True) as connection:
-            cursor = connection.cursor()
-            logger.info(f"[{connection_id}] Executing query with params: {params}")
-            cursor.execute(query, params)
+        # Reuse connection for better performance
+        connection = pyodbc.connect(conn_str, autocommit=True)
+        cursor = connection.cursor()
+        logger.info(f"[{connection_id}] Executing query with params: {params}")
+        
+        # Use server-side cursor with optimized fetch size
+        cursor.execute(query, params)
+        
+        # Fetch data in smaller batches to optimize memory usage
+        rows_fetched = 0
+        batch_count = 0
+        
+        while True:
+            # Check memory before fetching next batch
+            check_memory_and_cleanup(f"{connection_id} - Before fetching batch {batch_count}")
             
-            # Fetch data in smaller batches to optimize memory usage
-            rows_fetched = 0
-            batch_count = 0
+            # Fetch with optimized batch size
+            rows = cursor.fetchmany(BATCH_SIZE)
+            if not rows:
+                break
+                
+            rows_fetched += len(rows)
+            batch_count += 1
+            logger.info(f"[{connection_id}] Fetched batch {batch_count} with {len(rows)} rows ({rows_fetched} total)")
             
-            while True:
-                # Check memory before fetching next batch
-                check_memory_and_cleanup(f"{connection_id} - Before fetching batch {batch_count}")
-                
-                rows = cursor.fetchmany(BATCH_SIZE)
-                if not rows:
-                    break
-                    
-                rows_fetched += len(rows)
-                batch_count += 1
-                logger.info(f"[{connection_id}] Fetched batch {batch_count} with {len(rows)} rows ({rows_fetched} total)")
-                
-                # Convert rows to dictionaries
-                batch = []
-                column_names = [column[0] for column in cursor.description]
-                
-                for row in rows:
-                    row_dict = dict(zip(column_names, row))
-                    batch.append({
-                        'ODP_Key': str(row_dict.get('ODP_Key')) if row_dict.get('ODP_Key') else None,
-                        'ODP_Date': row_dict.get('ODP_Date'),
-                        'Shift': row_dict.get('Shift'),
-                        'ODP_EM_Key': int(row_dict.get('ODP_EM_Key')) if row_dict.get('ODP_EM_Key') and str(row_dict.get('ODP_EM_Key')).isdigit() else 0,
-                        'EM_RFID': str(row_dict.get('EM_RFID')) if row_dict.get('EM_RFID') else None,
-                        'EM_Department': str(row_dict.get('EM_Department')) if row_dict.get('EM_Department') else None,
-                        'EM_FirstName': str(row_dict.get('EM_FirstName')) if row_dict.get('EM_FirstName') else None,
-                        'EM_LastName': str(row_dict.get('EM_LastName')) if row_dict.get('EM_LastName') else None,
-                        'ODP_Actual_Clock_In': row_dict.get('ODP_Actual_Clock_In'),
-                        'ODP_Actual_Clock_Out': row_dict.get('ODP_Actual_Clock_Out'),
-                        'ODP_Shift_Clock_In': row_dict.get('ODP_Shift_Clock_In'),
-                        'ODP_Shift_Clock_Out': row_dict.get('ODP_Shift_Clock_Out'),
-                        'ODP_First_Hanger_Time': row_dict.get('ODP_First_Hanger_Time'),
-                        'ODP_Last_Hanger_Time': row_dict.get('ODP_Last_Hanger_Time'),
-                        'ODP_Current_Station': str(row_dict.get('ODP_Current_Station')) if row_dict.get('ODP_Current_Station') else None,
-                        'ODP_Lump_Sum_Payment': float(row_dict.get('ODP_Lump_Sum_Payment')) if row_dict.get('ODP_Lump_Sum_Payment') else 0.0,
-                        'ODP_Make_Up_Pay_Rate': float(row_dict.get('ODP_Make_Up_Pay_Rate')) if row_dict.get('ODP_Make_Up_Pay_Rate') else 0.0,
-                        'ODP_Last_Hanger_Start_Time': row_dict.get('ODP_Last_Hanger_Start_Time'),
-                        'ODPD_Key': str(row_dict.get('ODPD_Key')) if row_dict.get('ODPD_Key') else None,
-                        'ODPD_Workstation': str(row_dict.get('ODPD_Workstation')) if row_dict.get('ODPD_Workstation') else None,
-                        'ODPD_WC_Key': int(row_dict.get('ODPD_WC_Key')) if row_dict.get('ODPD_WC_Key') and str(row_dict.get('ODPD_WC_Key')).isdigit() else 0,
-                        'ODPD_Quantity': int(row_dict.get('ODPD_Quantity')) if row_dict.get('ODPD_Quantity') and str(row_dict.get('ODPD_Quantity')).isdigit() else 0,
-                        'ODPD_ST_Key': int(row_dict.get('ODPD_ST_Key')) if row_dict.get('ODPD_ST_Key') and str(row_dict.get('ODPD_ST_Key')).isdigit() else 0,
-                        'ST_ID': str(row_dict.get('ST_ID')) if row_dict.get('ST_ID') else None,
-                        'ST_Description': str(row_dict.get('ST_Description')) if row_dict.get('ST_Description') else None,
-                        'ODPD_Lot_Number': str(row_dict.get('ODPD_Lot_Number')) if row_dict.get('ODPD_Lot_Number') else None,
-                        'ODPD_OC_Key': int(row_dict.get('ODPD_OC_Key')) if row_dict.get('ODPD_OC_Key') and str(row_dict.get('ODPD_OC_Key')).isdigit() else 0,
-                        'OC_Description': str(row_dict.get('OC_Description')) if row_dict.get('OC_Description') else None,
-                        'Loading_Qty': int(row_dict.get('Loading_Qty')) if row_dict.get('Loading_Qty') and str(row_dict.get('Loading_Qty')).isdigit() else 0,
-                        'UnLoading_Qty': int(row_dict.get('UnLoading_Qty')) if row_dict.get('UnLoading_Qty') and str(row_dict.get('UnLoading_Qty')).isdigit() else 0,
-                        'OC_Piece_Rate': float(row_dict.get('OC_Piece_Rate')) if row_dict.get('OC_Piece_Rate') else 0.0,
-                        'OC_Standard_Time': float(row_dict.get('OC_Standard_Time')) if row_dict.get('OC_Standard_Time') else 0.0,
-                        'ODPD_Standard': float(row_dict.get('ODPD_Standard')) if row_dict.get('ODPD_Standard') else 0.0,
-                        'ODPD_Actual_Time': float(row_dict.get('ODPD_Actual_Time')) if row_dict.get('ODPD_Actual_Time') else 0.0,
-                        'ODPD_PA_Key': int(row_dict.get('ODPD_PA_Key')) if row_dict.get('ODPD_PA_Key') and str(row_dict.get('ODPD_PA_Key')).isdigit() else 0,
-                        'ODPD_Pay_Rate': float(row_dict.get('ODPD_Pay_Rate')) if row_dict.get('ODPD_Pay_Rate') else 0.0,
-                        'ODPD_Piece_Rate': float(row_dict.get('ODPD_Piece_Rate')) if row_dict.get('ODPD_Piece_Rate') else 0.0,
-                        'ODPD_Start_Time': row_dict.get('ODPD_Start_Time'),
-                        'ODPD_CM_Key': int(row_dict.get('ODPD_CM_Key')) if row_dict.get('ODPD_CM_Key') and str(row_dict.get('ODPD_CM_Key')).isdigit() else 0,
-                        'CM_Description': str(row_dict.get('CM_Description')) if row_dict.get('CM_Description') else None,
-                        'ODPD_SM_Key': int(row_dict.get('ODPD_SM_Key')) if row_dict.get('ODPD_SM_Key') and str(row_dict.get('ODPD_SM_Key')).isdigit() else 0,
-                        'SM_Description': str(row_dict.get('SM_Description')) if row_dict.get('SM_Description') else None,
-                        'ODPD_Normal_Pay_Factor': float(row_dict.get('ODPD_Normal_Pay_Factor')) if row_dict.get('ODPD_Normal_Pay_Factor') else 0.0,
-                        'ODPD_Is_Overtime': bool(row_dict.get('ODPD_Is_Overtime')) if row_dict.get('ODPD_Is_Overtime') is not None else False,
-                        'ODPD_Overtime_Factor': float(row_dict.get('ODPD_Overtime_Factor')) if row_dict.get('ODPD_Overtime_Factor') else 0.0,
-                        'ODPD_Edited_By': str(row_dict.get('ODPD_Edited_By')) if row_dict.get('ODPD_Edited_By') else None,
-                        'ODPD_Edited_Date': row_dict.get('ODPD_Edited_Date'),
-                        'ODPD_Actual_Time_From_Reader': float(row_dict.get('ODPD_Actual_Time_From_Reader')) if row_dict.get('ODPD_Actual_Time_From_Reader') else 0.0,
-                        'ODPD_STPO_Key': int(row_dict.get('ODPD_STPO_Key')) if row_dict.get('ODPD_STPO_Key') and str(row_dict.get('ODPD_STPO_Key')).isdigit() else 0,
-                        'created_at': row_dict.get('created_at'),
-                        'source_connection': connection_id
-                    })
-                
-                # Validate batch data
-                validated_batch = validate_data(batch)
-                logger.info(f"[{connection_id}] Validated {len(validated_batch)} transactions in current batch")
-                
-                # Yield the batch for processing
-                yield validated_batch
-                
-                # Memory cleanup after processing batch
-                del batch, validated_batch, rows
-                check_memory_and_cleanup(f"{connection_id} - After processing batch {batch_count}")
-                
+            # Convert rows to dictionaries more efficiently
+            batch = []
+            column_names = [column[0] for column in cursor.description]
+            
+            for row in rows:
+                row_dict = dict(zip(column_names, row))
+                batch.append({
+                    'qcr_key': str(row_dict['QCR_Key']) if row_dict.get('QCR_Key') is not None else None,
+                    'qcr_stpo_key': int(row_dict['QCR_STPO_Key']) if row_dict.get('QCR_STPO_Key') is not None and str(row_dict['QCR_STPO_Key']).isdigit() else None,
+                    'qcr_defect_datetime': row_dict.get('QCR_Defect_DateTime'),
+                    'shift': str(row_dict.get('SHIFT')) if row_dict.get('SHIFT') is not None else None,
+                    'qcr_defect_em_key': int(row_dict['QCR_Defect_EM_Key']) if row_dict.get('QCR_Defect_EM_Key') is not None and str(row_dict['QCR_Defect_EM_Key']).isdigit() else None,
+                    'qcr_defect_st_key': int(row_dict['QCR_Defect_ST_Key']) if row_dict.get('QCR_Defect_ST_Key') is not None and str(row_dict['QCR_Defect_ST_Key']).isdigit() else None,
+                    'qcr_defect_oc_key': int(row_dict['QCR_Defect_OC_Key']) if row_dict.get('QCR_Defect_OC_Key') is not None and str(row_dict['QCR_Defect_OC_Key']).isdigit() else None,
+                    'qcr_sent_to_rework_by_em_key': int(row_dict['QCR_Sent_To_Rework_By_EM_Key']) if row_dict.get('QCR_Sent_To_Rework_By_EM_Key') is not None and str(row_dict['QCR_Sent_To_Rework_By_EM_Key']).isdigit() else None,
+                    'qcr_defect_quantity': int(row_dict['QCR_Defect_Quantity']) if row_dict.get('QCR_Defect_Quantity') is not None and str(row_dict['QCR_Defect_Quantity']).isdigit() else None,
+                    'qcr_from_qc_station': str(row_dict.get('QCR_From_QC_Station')) if row_dict.get('QCR_From_QC_Station') is not None else None,
+                    'qcr_hm_id': str(row_dict.get('QCR_HM_ID')) if row_dict.get('QCR_HM_ID') is not None else None,
+                    'qcr_qc_datetime': row_dict.get('QCR_QC_DateTime'),
+                    'qcr_repair_em_key': int(row_dict['QCR_Repair_EM_Key']) if row_dict.get('QCR_Repair_EM_Key') is not None and str(row_dict['QCR_Repair_EM_Key']).isdigit() else None,
+                    'qcr_repair_datetime': row_dict.get('QCR_Repair_DateTime'),
+                    'qcr_repair_quantity': int(row_dict['QCR_Repair_Quantity']) if row_dict.get('QCR_Repair_Quantity') is not None and str(row_dict['QCR_Repair_Quantity']).isdigit() else None,
+                    'qcr_defect_cm_key': int(row_dict['QCR_Defect_CM_Key']) if row_dict.get('QCR_Defect_CM_Key') is not None and str(row_dict['QCR_Defect_CM_Key']).isdigit() else None,
+                    'qcr_defect_sm_key': int(row_dict['QCR_Defect_SM_Key']) if row_dict.get('QCR_Defect_SM_Key') is not None and str(row_dict['QCR_Defect_SM_Key']).isdigit() else None,
+                    'qcr_qcsc_key': int(row_dict['QCR_QCSC_Key']) if row_dict.get('QCR_QCSC_Key') is not None and str(row_dict['QCR_QCSC_Key']).isdigit() else None,
+                    'qcr_hm_key': int(row_dict['QCR_HM_Key']) if row_dict.get('QCR_HM_Key') is not None and str(row_dict['QCR_HM_Key']).isdigit() else None,
+                    'qcsc_description': str(row_dict.get('QCSC_Description')) if row_dict.get('QCSC_Description') is not None else None,
+                    'em_firstname': str(row_dict.get('EM_FirstName')) if row_dict.get('EM_FirstName') is not None else None,
+                    'em_key': int(row_dict['EM_Key']) if row_dict.get('EM_Key') is not None and str(row_dict['EM_Key']).isdigit() else None,
+                    'em_rfid': str(row_dict.get('EM_RFID')) if row_dict.get('EM_RFID') is not None else None,
+                    'st_id': str(row_dict.get('ST_ID')) if row_dict.get('ST_ID') is not None else None,
+                    'st_description': str(row_dict.get('ST_Description')) if row_dict.get('ST_Description') is not None else None,
+                    'stpo_st_key': int(row_dict['STPO_ST_Key']) if row_dict.get('STPO_ST_Key') is not None and str(row_dict['STPO_ST_Key']).isdigit() else None,
+                    'stpo_id': str(row_dict.get('STPO_ID')) if row_dict.get('STPO_ID') is not None else None,
+                    'stpo_ci_name': str(row_dict.get('STPO_CI_Name')) if row_dict.get('STPO_CI_Name') is not None else None,
+                    'created_at': row_dict.get('QCR_Defect_DateTime'),  # or datetime.utcnow() if you want ingestion time
+                    'source_connection': connection_id
+                })                
+            # Validate batch data
+            validated_batch = validate_data(batch, connection_id)
+            logger.info(f"[{connection_id}] Validated {len(validated_batch)} transactions in current batch")
+            
+            # Yield the batch for processing
+            yield validated_batch
+            
+            # Memory cleanup after processing batch
+            del batch, validated_batch, rows
+            check_memory_and_cleanup(f"{connection_id} - After processing batch {batch_count}")
+            
+        # Close connection
+        cursor.close()
+        connection.close()
+        
         logger.info(f"[{connection_id}] Finished fetching {rows_fetched} rows in {time.time() - start_time:.2f} seconds")
         
     except Exception as e:
-        logger.error(f"Error fetching data from {connection_id}: {e}")
+        logger.error(f"[{connection_id}] Error fetching data: {e}")
         # Don't raise the exception, just log it and continue
 
 
@@ -554,11 +575,15 @@ def save_to_postgres(connection_id: str) -> str:
     process_start_time = pendulum.now("Asia/Karachi")
     last_extract_dt = None
     
-    engine = get_postgres_engine()
+    engine = get_postgres_engine("pg-ssg")
     try:
-        create_table_if_not_exists(engine)
+        # create_table_if_not_exists(engine)
         Session = sessionmaker(bind=engine)
         session = Session()
+        
+        # Create table if not exists
+        create_qcr_table_if_not_exists(engine)
+        create_etl_log_qcr_table_if_not_exists(engine)
         
         # Process data in streaming fashion with memory optimization
         batch_count = 0
@@ -579,30 +604,49 @@ def save_to_postgres(connection_id: str) -> str:
             sub_batch_size = min(500, BATCH_SIZE // 2)  # Smaller sub-batches
             for i in range(0, len(batch), sub_batch_size):
                 sub_batch = batch[i:i + sub_batch_size]
-                batch_objects = []
                 
-                for transaction_data in sub_batch:
-                    try:
-                        transaction = HangerLaneData(**transaction_data)
-                        batch_objects.append(transaction)
-                    except Exception as e:
-                        logger.error(f"Error creating transaction object: {e}")
-                        continue
-                        
+                # Use bulk insert instead of creating objects and adding individually
                 try:
-                    if batch_objects:  # Only commit if we have objects
-                        session.add_all(batch_objects)
-                        session.commit()
-                        saved_count += len(batch_objects)
-                        logger.info(f"[{connection_id}] Saved {len(batch_objects)} records in current sub-batch - {saved_count} total records saved so far")
+                    if sub_batch:  # Only insert if we have data
+                        # Prepare data for bulk insert
+                        insert_data = []
+                        for transaction_data in sub_batch:
+                            try:
+                                # Clean the data before insertion
+                                cleaned_data = {k: v for k, v in transaction_data.items() if v is not None}
+                                # Remove 'id' field as it's auto-incrementing
+                                if 'id' in cleaned_data:
+                                    del cleaned_data['id']
+                                # Add missing fields with default values if needed
+                                if 'source_connection' not in cleaned_data:
+                                    cleaned_data['source_connection'] = connection_id
+                                insert_data.append(cleaned_data)
+                            except Exception as e:
+                                logger.error(f"Error preparing transaction data for bulk insert: {e}")
+                                continue
                         
-                        # Memory cleanup after each sub-batch
-                        session.expunge_all()  # Remove objects from session to free memory
-                        del batch_objects
-                        
-                        # Check memory usage periodically
-                        if saved_count % (sub_batch_size * 5) == 0:
-                            check_memory_and_cleanup(f"{connection_id} - After saving {saved_count} records")
+                        if insert_data:
+                            # Debug: Log the first record to see what fields are being included
+                            if insert_data and len(insert_data) > 0:
+                                logger.debug(f"[{connection_id}] First record keys: {list(insert_data[0].keys())}")
+                                # Check if 'id' field is present in any record
+                                records_with_id = [record for record in insert_data if 'id' in record]
+                                if records_with_id:
+                                    logger.warning(f"[{connection_id}] Found 'id' field in {len(records_with_id)} records, removing them")
+                                    # Remove 'id' field from all records
+                                    for record in insert_data:
+                                        if 'id' in record:
+                                            del record['id']
+                            
+                            # Use bulk insert for better performance with explicit batch size
+                            session.bulk_insert_mappings(QualityControlRepair, insert_data, render_nulls=True)
+                            session.commit()
+                            saved_count += len(insert_data)
+                            logger.info(f"[{connection_id}] Saved {len(insert_data)} records in current sub-batch - {saved_count} total records saved so far")
+                            
+                            # Check memory usage periodically
+                            if saved_count % (sub_batch_size * 5) == 0:
+                                check_memory_and_cleanup(f"{connection_id} - After saving {saved_count} records")
                             
                 except Exception as e:
                     session.rollback()
@@ -666,7 +710,8 @@ def save_to_postgres(connection_id: str) -> str:
     finally:
         if 'session' in locals():
             session.close()
-        engine.dispose()
+        # Dispose of the engine to free resources
+        dispose_postgres_engine("pg-ssg")
         # Final memory cleanup
         perform_memory_cleanup()
         
@@ -685,20 +730,20 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_hanger_lines_21-22-23",
+    dag_id="etl_hanger_lines_qcr",
     default_args=default_args,
     schedule=timedelta(minutes=30),
-    # schedule='2,12,22,32,42,52 * * * *',
+    # schedule='9,19,29,39,49,59 * * * *',
     start_date=datetime(2025, 4, 1, 2, 20),  # First run at 2:20 AM
-    tags=["ssg", "line", "24-to-26"],
+    tags=["ssg", "line", "qcr"],
     catchup=False,
     max_active_runs=1,
-    description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL (Working)",
+    description="ETL pipeline for Hanger lines QCR data from MSSQL to PostgreSQL (Working)",
 )
 
-def dynamic_hanger_db_etl_working():
+def dynamic_hanger_db_etl_qcr():
     """
-    Dynamic ETL DAG for Hanger lines data with proper error handling.
+    Dynamic ETL DAG for Hanger lines QCR data with proper error handling.
     
     This DAG dynamically creates tasks for each data source defined in SOURCE_HANGER_LANE.
     For each source, it:
@@ -742,10 +787,11 @@ def dynamic_hanger_db_etl_working():
                     with pyodbc.connect(conn_str) as connection:
                         cursor = connection.cursor()
                         # Query to check if there are records newer than last_extract_dt
+                        # Added WITH (NOLOCK) hint for better performance
                         cursor.execute("""
                             SELECT COUNT(*) 
-                            FROM [IHS].[dbo].[ODP_Detail] 
-                            WHERE created_at > ?
+                            FROM [IHS_SHARED].[dbo].[QC_Rework] WITH (NOLOCK)
+                            WHERE QCR_Defect_DateTime > ?
                         """, [last_extract_dt])
                         count = cursor.fetchone()[0]
                         has_new_data = count > 0
@@ -837,38 +883,6 @@ def dynamic_hanger_db_etl_working():
     
 
     @task
-
-    def transform(**context):
-        """
-        Execute the hanger line data transformation using imported functions.
-        """
-        logger.info("Starting hanger line data transformation")
-        
-        try:
-            # Create Spark session
-            logger.info("Creating Spark session...")
-            spark = create_spark_session()
-            logger.info("Spark session created successfully")
-            
-            # Execute transformation
-            logger.info("Executing data transformation...")
-            success = transform_data(spark)
-            
-            if success:
-                logger.info("Data transformation completed successfully")
-                return "Transformation completed successfully"
-            else:
-                logger.warning("Data transformation completed with issues")
-                return "Transformation completed with issues"
-                
-        except Exception as e:
-            logger.error(f"Error during data transformation: {e}")
-            # Don't raise the exception, just log it
-            return f"Transformation failed: {e}"
-
-
-
-    @task
     def skip_task(connection_id: str) -> None:
         """
         Skip processing for a connection.
@@ -881,7 +895,7 @@ def dynamic_hanger_db_etl_working():
 
     # Create tasks for each data source
     save_tasks = []
-    for conn_id in SOURCE_LINE_21_22_23:
+    for conn_id in SOURCE_HANGER_LANE:
         # Create task instances with a generic suffix
         # We can't determine the last extract datetime during DAG parsing
         # task_id_suffix = 'dynamic'
@@ -915,8 +929,13 @@ def dynamic_hanger_db_etl_working():
     # else:
     #     start >> transform_task >> end
     
-    return dynamic_hanger_db_etl_working
+    return dynamic_hanger_db_etl_qcr
 
 
 # Create the DAG instance
-dag = dynamic_hanger_db_etl_working()
+dag = dynamic_hanger_db_etl_qcr()
+
+# If running as main module, test the functions
+if __name__ == "__main__":
+    # This section is for testing purposes only
+    print("hanger_line_qcr.py loaded successfully")

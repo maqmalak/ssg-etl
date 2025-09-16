@@ -3,6 +3,7 @@ Utility functions for performing upsert operations on PostgreSQL tables.
 """
 
 import psycopg2
+from psycopg2.extras import execute_values
 from typing import Dict, List, Any
 
 
@@ -13,7 +14,7 @@ def upsert_data_via_postgres(
     connection_params: Dict[str, str]
 ) -> bool:
     """
-    Perform upsert operation on PostgreSQL table using psycopg2.
+    Perform upsert operation on PostgreSQL table using psycopg2 with optimizations.
     
     Args:
         data: List of dictionaries containing the data to upsert
@@ -41,8 +42,20 @@ def upsert_data_via_postgres(
             
         # Get column names from the first record
         columns = list(data[0].keys())
-        all_columns_str = ", ".join(columns)
+        all_columns_str = ", ".join([f'"{col}"' for col in columns])  # Use double quotes for case sensitivity
         
+        # Validate that key columns are not NULL
+        valid_data = []
+        for record in data:
+            if all(record.get(col) is not None for col in key_columns):
+                valid_data.append(record)
+            else:
+                print(f"Skipping record with NULL key: {record}")
+        
+        if not valid_data:
+            print("All records have NULL in key columns. Nothing to upsert.")
+            return True
+            
         # Create the staging table
         staging_table = f"{table_name}_staging"
         
@@ -50,29 +63,29 @@ def upsert_data_via_postgres(
         cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
         
         # Create staging table with same structure as target table
+        # Use double quotes for column names to preserve case sensitivity
         cursor.execute(f"""
             CREATE TABLE {staging_table} (LIKE {table_name} INCLUDING ALL);
         """)
         
-        # Insert data into staging table
-        # Prepare the INSERT statement
-        placeholders = ", ".join(["%s"] * len(columns))
-        insert_sql = f"INSERT INTO {staging_table} ({all_columns_str}) VALUES ({placeholders})"
+        # Insert data into staging table using execute_values for better performance
+        insert_sql = f"INSERT INTO {staging_table} ({all_columns_str}) VALUES %s"
         
         # Prepare data tuples
-        data_tuples = [tuple(record[col] for col in columns) for record in data]
+        data_tuples = [tuple(record[col] for col in columns) for record in valid_data]
         
-        # Execute batch insert
-        cursor.executemany(insert_sql, data_tuples)
+        # Execute batch insert with execute_values for 10-100x speedup
+        execute_values(cursor, insert_sql, data_tuples)
         
         # Perform upsert using ON CONFLICT
-        key_columns_str = ", ".join(key_columns)
+        # Use double quotes for key columns to preserve case sensitivity
+        key_columns_str = ", ".join([f'"{col}"' for col in key_columns])
         
         # Generate the SET clause for UPDATE (excluding key columns)
         set_columns = [col for col in columns if col not in key_columns]
-        set_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in set_columns])
+        set_clause = ", ".join([f'"{col}" = EXCLUDED."{col}"' for col in set_columns])
         
-        # UPSERT SQL statement
+        # UPSERT SQL statement with double quotes for column names
         upsert_sql = f"""
         INSERT INTO {table_name} ({all_columns_str})
         SELECT {all_columns_str} FROM {staging_table}
@@ -91,7 +104,7 @@ def upsert_data_via_postgres(
         cursor.close()
         conn.close()
         
-        print(f"Successfully upserted {len(data)} records to {table_name}")
+        print(f"Successfully upserted {len(valid_data)} records to {table_name}")
         return True
         
     except Exception as e:

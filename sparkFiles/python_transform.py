@@ -86,13 +86,13 @@ def transform_data():
         
         # Save the results to their respective tables
         logger.info("Saving aggregated data...")
-        aggregated_df1.to_sql('opd_date_oc', engine, if_exists='replace', index=False)
-        aggregated_df2.to_sql('opd_date_shift', engine, if_exists='replace', index=False)
-        aggregated_df3.to_sql('opd_date_employee', engine, if_exists='replace', index=False)
+        aggregated_df1.to_sql('odp_date_oc', engine, if_exists='replace', index=False)
+        aggregated_df2.to_sql('odp_date_shift', engine, if_exists='replace', index=False)
+        aggregated_df3.to_sql('odp_date_employee', engine, if_exists='replace', index=False)
         
-        logger.info(f"Successfully transformed and saved {len(aggregated_df1)} records to opd_date_oc table")
-        logger.info(f"Successfully transformed and saved {len(aggregated_df2)} records to opd_date_shift table")
-        logger.info(f"Successfully transformed and saved {len(aggregated_df3)} records to opd_date_employee table")
+        logger.info(f"Successfully transformed and saved {len(aggregated_df1)} records to odp_date_oc table")
+        logger.info(f"Successfully transformed and saved {len(aggregated_df2)} records to odp_date_shift table")
+        logger.info(f"Successfully transformed and saved {len(aggregated_df3)} records to odp_date_employee table")
         return True
         
     except Exception as e:

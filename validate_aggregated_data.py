@@ -45,8 +45,8 @@ def validate_aggregated_tables():
         conn = get_database_connection()
         cursor = conn.cursor()
         
-        # Validate opd_date_oc table
-        logger.info("Validating opd_date_oc table...")
+        # Validate odp_date_oc table
+        logger.info("Validating odp_date_oc table...")
         cursor.execute("""
             SELECT 
                 COUNT(*) as total_records,
@@ -56,17 +56,17 @@ def validate_aggregated_tables():
                 SUM(ODPD_Quantity) as total_quantity,
                 MAX(ODP_Date) as latest_date,
                 MIN(ODP_Date) as earliest_date
-            FROM opd_date_oc
+            FROM odp_date_oc
         """)
         oc_stats = cursor.fetchone()
         oc_stats_dict = dict(zip([
             'total_records', 'unique_dates', 'unique_operations', 
             'unique_lines', 'total_quantity', 'latest_date', 'earliest_date'
         ], oc_stats))
-        logger.info(f"opd_date_oc statistics: {oc_stats_dict}")
+        logger.info(f"odp_date_oc statistics: {oc_stats_dict}")
         
-        # Validate opd_date_shift table
-        logger.info("Validating opd_date_shift table...")
+        # Validate odp_date_shift table
+        logger.info("Validating odp_date_shift table...")
         cursor.execute("""
             SELECT 
                 COUNT(*) as total_records,
@@ -76,17 +76,17 @@ def validate_aggregated_tables():
                 SUM(ODPD_Quantity) as total_quantity,
                 MAX(ODP_Date) as latest_date,
                 MIN(ODP_Date) as earliest_date
-            FROM opd_date_shift
+            FROM odp_date_shift
         """)
         shift_stats = cursor.fetchone()
         shift_stats_dict = dict(zip([
             'total_records', 'unique_dates', 'unique_shifts', 
             'unique_lines', 'total_quantity', 'latest_date', 'earliest_date'
         ], shift_stats))
-        logger.info(f"opd_date_shift statistics: {shift_stats_dict}")
+        logger.info(f"odp_date_shift statistics: {shift_stats_dict}")
         
-        # Validate opd_date_employee table
-        logger.info("Validating opd_date_employee table...")
+        # Validate odp_date_employee table
+        logger.info("Validating odp_date_employee table...")
         cursor.execute("""
             SELECT 
                 COUNT(*) as total_records,
@@ -96,14 +96,14 @@ def validate_aggregated_tables():
                 SUM(ODPD_Quantity) as total_quantity,
                 MAX(ODP_Date) as latest_date,
                 MIN(ODP_Date) as earliest_date
-            FROM opd_date_employee
+            FROM odp_date_employee
         """)
         employee_stats = cursor.fetchone()
         employee_stats_dict = dict(zip([
             'total_records', 'unique_dates', 'unique_employees', 
             'unique_lines', 'total_quantity', 'latest_date', 'earliest_date'
         ], employee_stats))
-        logger.info(f"opd_date_employee statistics: {employee_stats_dict}")
+        logger.info(f"odp_date_employee statistics: {employee_stats_dict}")
         
         # Cross-validation: Check if totals match across tables
         logger.info("Performing cross-validation...")
@@ -111,16 +111,16 @@ def validate_aggregated_tables():
             logger.info("✅ Quantity totals match across all aggregated tables")
         else:
             logger.warning("⚠ Quantity totals do not match across tables")
-            logger.warning(f"  opd_date_oc total: {oc_stats[4]}")
-            logger.warning(f"  opd_date_shift total: {shift_stats[4]}")
-            logger.warning(f"  opd_date_employee total: {employee_stats[4]}")
+            logger.warning(f"  odp_date_oc total: {oc_stats[4]}")
+            logger.warning(f"  odp_date_shift total: {shift_stats[4]}")
+            logger.warning(f"  odp_date_employee total: {employee_stats[4]}")
         
         # Check data freshness
         logger.info("Checking data freshness...")
         for table_name, stats in [
-            ("opd_date_oc", oc_stats),
-            ("opd_date_shift", shift_stats),
-            ("opd_date_employee", employee_stats)
+            ("odp_date_oc", oc_stats),
+            ("odp_date_shift", shift_stats),
+            ("odp_date_employee", employee_stats)
         ]:
             latest_date = stats[5]
             if latest_date:
@@ -134,9 +134,9 @@ def validate_aggregated_tables():
         logger.info("Checking data completeness...")
         tables_with_issues = []
         for table_name, stats in [
-            ("opd_date_oc", oc_stats),
-            ("opd_date_shift", shift_stats),
-            ("opd_date_employee", employee_stats)
+            ("odp_date_oc", oc_stats),
+            ("odp_date_shift", shift_stats),
+            ("odp_date_employee", employee_stats)
         ]:
             if stats[0] == 0:
                 logger.error(f"❌ {table_name} is empty")
@@ -174,7 +174,7 @@ def validate_data_quality():
         
         # Check for negative quantities
         logger.info("Checking for negative quantities...")
-        for table in ['opd_date_oc', 'opd_date_shift', 'opd_date_employee']:
+        for table in ['odp_date_oc', 'odp_date_shift', 'odp_date_employee']:
             cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE ODPD_Quantity < 0")
             negative_count = cursor.fetchone()[0]
             if negative_count > 0:
@@ -185,9 +185,9 @@ def validate_data_quality():
         # Check for null values in key columns
         logger.info("Checking for null values in key columns...")
         null_checks = [
-            ("opd_date_oc", ["ODP_Date", "OC_Description", "source_connection"]),
-            ("opd_date_shift", ["ODP_Date", "Shift", "source_connection"]),
-            ("opd_date_employee", ["ODP_Date", "ODP_EM_Key", "source_connection"])
+            ("odp_date_oc", ["ODP_Date", "OC_Description", "source_connection"]),
+            ("odp_date_shift", ["ODP_Date", "Shift", "source_connection"]),
+            ("odp_date_employee", ["ODP_Date", "ODP_EM_Key", "source_connection"])
         ]
         
         for table, columns in null_checks:
@@ -202,9 +202,9 @@ def validate_data_quality():
         # Check for duplicate records (based on primary keys)
         logger.info("Checking for duplicate records...")
         duplicate_checks = [
-            ("opd_date_oc", ["ODP_Date", "OC_Description", "source_connection"]),
-            ("opd_date_shift", ["ODP_Date", "Shift", "source_connection"]),
-            ("opd_date_employee", ["ODP_Date", "ODP_EM_Key", "source_connection"])
+            ("odp_date_oc", ["ODP_Date", "OC_Description", "source_connection"]),
+            ("odp_date_shift", ["ODP_Date", "Shift", "source_connection"]),
+            ("odp_date_employee", ["ODP_Date", "ODP_EM_Key", "source_connection"])
         ]
         
         for table, key_columns in duplicate_checks:

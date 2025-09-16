@@ -23,16 +23,16 @@ Data Quality Validation
 Spark Processing & Aggregation
     ↓
 Three Aggregated Tables:
-├── opd_date_oc (Operation Code Summary)
-├── opd_date_shift (Shift Summary)
-└── opd_date_employee (Employee Summary)
+├── odp_date_oc (Operation Code Summary)
+├── odp_date_shift (Shift Summary)
+└── odp_date_employee (Employee Summary)
     ↓
 Data Quality & Completeness Validation
 ```
 
 ## Aggregated Tables Structure
 
-### 1. opd_date_oc - Operation Code Summary
+### 1. odp_date_oc - Operation Code Summary
 **Purpose**: Daily operational metrics by operation type
 **Primary Key**: (ODP_Date, OC_Description, source_connection)
 **Business Value**: 
@@ -40,7 +40,7 @@ Data Quality & Completeness Validation
 - Track operation-specific performance trends
 - Support operational decision-making
 
-### 2. opd_date_shift - Shift Summary
+### 2. odp_date_shift - Shift Summary
 **Purpose**: Daily metrics by work shift
 **Primary Key**: (ODP_Date, Shift, source_connection)
 **Business Value**:
@@ -48,7 +48,7 @@ Data Quality & Completeness Validation
 - Optimize shift scheduling
 - Identify shift-specific performance patterns
 
-### 3. opd_date_employee - Employee Summary
+### 3. odp_date_employee - Employee Summary
 **Purpose**: Daily metrics by individual employee
 **Primary Key**: (ODP_Date, ODP_EM_Key, source_connection)
 **Business Value**:

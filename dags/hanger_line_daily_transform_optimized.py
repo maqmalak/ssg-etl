@@ -18,7 +18,7 @@ from pendulum import timezone
 scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
 sys.path.append(os.path.abspath(scripts_path))
 
-from scripts.create_target_production_table_pg import (
+from scripts.create_table_hourly import (
     create_target_table_if_not_exists,
     create_etl_log_odp_table_if_not_exists,
     OdpDateOc,

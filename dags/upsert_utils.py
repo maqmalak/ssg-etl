@@ -68,14 +68,25 @@ def upsert_data_via_postgres(
             CREATE TABLE {staging_table} (LIKE {table_name} INCLUDING ALL);
         """)
         
+        # Remove duplicate records based on key columns to prevent staging table constraint violations
+        seen_keys = set()
+        deduplicated_data = []
+        for record in valid_data:
+            # Create a tuple of key values to identify unique records
+            key_values = tuple(record.get(col) for col in key_columns)
+            if key_values not in seen_keys:
+                seen_keys.add(key_values)
+                deduplicated_data.append(record)
+        
         # Insert data into staging table using execute_values for better performance
         insert_sql = f"INSERT INTO {staging_table} ({all_columns_str}) VALUES %s"
         
         # Prepare data tuples
-        data_tuples = [tuple(record[col] for col in columns) for record in valid_data]
+        data_tuples = [tuple(record[col] for col in columns) for record in deduplicated_data]
         
         # Execute batch insert with execute_values for 10-100x speedup
-        execute_values(cursor, insert_sql, data_tuples)
+        if data_tuples:  # Only execute if we have data
+            execute_values(cursor, insert_sql, data_tuples)
         
         # Perform upsert using ON CONFLICT
         # Use double quotes for key columns to preserve case sensitivity

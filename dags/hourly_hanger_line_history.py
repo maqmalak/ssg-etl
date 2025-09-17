@@ -3,8 +3,15 @@ Hourly DAG for aggregating hanger line data and upserting to production tables
 """
 
 import time
-import logging
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Generator
+import logging
+import subprocess
+import sys
+import os
+import psutil
+import gc
+
 from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
@@ -14,8 +21,12 @@ import os
 import sys
 import pandas as pd
 from pendulum import timezone
-from sqlalchemy import create_engine
 from collections import defaultdict
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+# Constants for retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
 
 # Add the scripts directory to the Python path
 scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
@@ -78,6 +89,143 @@ def log_etl_metrics(start_time, records_processed=0, tables_updated=[], status="
     logger.info(f"ETL Metrics: {metrics}")
     return metrics
 
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Timezone configuration
+PKT = timezone("Asia/Karachi")
+
+# Constants for retry configuration
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
+
+# Memory optimization constants
+BATCH_SIZE = 1000
+MAX_MEMORY_USAGE_PERCENT = 80.0  # Maximum memory usage percentage before triggering cleanup
+
+
+def get_memory_usage() -> float:
+    """Get current memory usage percentage."""
+    return psutil.virtual_memory().percent
+
+
+def log_memory_usage(operation: str) -> None:
+    """Log current memory usage."""
+    memory_percent = get_memory_usage()
+    logger.info(f"[MEMORY] {operation} - Memory usage: {memory_percent:.2f}%")
+
+
+def perform_memory_cleanup() -> None:
+    """Perform garbage collection to free memory."""
+    gc.collect()
+    logger.info("[MEMORY] Garbage collection performed")
+
+
+def check_memory_and_cleanup(operation: str) -> None:
+    """Check memory usage and perform cleanup if needed."""
+    log_memory_usage(operation)
+    if get_memory_usage() > MAX_MEMORY_USAGE_PERCENT:
+        logger.warning(f"[MEMORY] High memory usage detected during {operation}")
+        perform_memory_cleanup()
+        log_memory_usage(f"{operation} - After cleanup")
+
+
+# Global engine cache to reuse connections
+_engine_cache = {}
+
+def get_postgres_engine(connection_name: str = "pg-ssg"):
+    """
+    Create and return a PostgreSQL engine using Airflow connection.
+    Reuses existing engines when possible for better performance.
+    
+    Args:
+        connection_name (str): Name of the Airflow connection to use
+        
+    Returns:
+        sqlalchemy.engine.Engine: PostgreSQL engine instance
+    """
+    # Check if we already have an engine for this connection
+    if connection_name in _engine_cache:
+        return _engine_cache[connection_name]
+    
+    try:
+        connection = BaseHook.get_connection(connection_name)
+        # Properly encode the password to handle special characters like '@'
+        from urllib.parse import quote_plus
+        password = quote_plus(connection.password) if connection.password else ''
+        uri = f"postgresql://{connection.login}:{password}@{connection.host}:{connection.port}/{connection.schema}"
+        logger.info(f"Using Airflow connection: {connection.host}:{connection.port}/{connection.schema}")
+    except Exception as e:
+        logger.warning(f"Could not get {connection_name} connection, using default values: {e}")
+        # Fallback to default values for testing
+        # Properly encode the password to handle special characters like '@'
+        from urllib.parse import quote_plus
+        password = quote_plus("P@akistan12")
+        uri = f"postgresql://postgres:{password}@172.16.7.6:5432/ssg"
+        logger.info("Using fallback connection: 172.16.7.6:5432/ssg")
+    
+    # Use connection pooling for better performance with optimized settings
+    engine = create_engine(
+        uri,
+        pool_size=10,  # Increased pool size for better concurrency
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        pool_timeout=30,
+        echo=False  # Disable SQL logging for performance
+    )
+    
+    # Cache the engine for reuse
+    _engine_cache[connection_name] = engine
+    return engine
+
+def dispose_postgres_engine(connection_name: str = "pg-ssg"):
+    """
+    Dispose of a PostgreSQL engine and remove it from the cache.
+    
+    Args:
+        connection_name (str): Name of the Airflow connection
+    """
+    if connection_name in _engine_cache:
+        _engine_cache[connection_name].dispose()
+        del _engine_cache[connection_name]
+        logger.info(f"Disposed PostgreSQL engine for connection: {connection_name}")
+
+
+def retry_on_exception(max_retries: int = MAX_RETRIES, delay: int = RETRY_DELAY):
+    """
+    Decorator to retry a function on exception.
+    
+    Args:
+        max_retries (int): Maximum number of retry attempts
+        delay (int): Delay between retries in seconds
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(
+                        f"Attempt {attempt + 1} failed for {func.__name__}: {str(e)}"
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"All {max_retries} attempts failed for {func.__name__}"
+                        )
+                        raise last_exception
+            return None
+        return wrapper
+    return decorator
+
+
+
+
 def get_database_connection():
     """
     Get database connection with proper error handling
@@ -118,7 +266,7 @@ def get_database_connection():
         logger.error(f"Database connection failed: {e}")
         raise
 
-def create_production_tables_if_not_exist():
+def create_hourly_tables_if_not_exist():
     """
     Create production tables if they don't exist
     """
@@ -155,6 +303,98 @@ def create_production_tables_if_not_exist():
         logger.error(f"Error creating production tables: {e}")
         raise
 
+
+@retry_on_exception()
+def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
+    """
+    Get the last extract datetime for a source connection from the ETL log.
+    
+    Args:
+        source_connection (str): Source connection identifier
+        
+    Returns:
+        Optional[datetime]: Last extract datetime or None if not found
+    """
+    engine = get_postgres_engine("pg-ssg")
+    try:
+        # Create the ETL log table if it doesn't exist
+        create_etl_hourly_log_odp_table_if_not_exists(engine)
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    "SELECT MAX(lastextractdatetime) FROM etl_qcr_extract_log WHERE status='Completed' and source_connection = :src"
+                ),
+                {"src": source_connection},
+            ).scalar()
+            logger.info(f"Last extract datetime for {source_connection}: {result}")
+            return result
+    except Exception as e:
+        logger.error(f"Error fetching last extract datetime for {source_connection}: {e}")
+        # If we can't access the log table, return None to trigger full extraction
+        return None
+    finally:
+        dispose_postgres_engine("pg-ssg")
+
+
+def insert_etl_log(
+    processlogid: str,
+    source_connection: str,
+    saved_count: int,
+    starttime: datetime,
+    endtime: datetime,
+    last_extract_dt: Optional[datetime],
+    success: bool,
+    status: str,
+    errormessage: Optional[str],
+) -> None:
+    """
+    Insert ETL process log into the database.
+    
+    Args:
+        processlogid (str): Unique process ID
+        source_connection (str): Source connection identifier
+        saved_count (int): Number of records saved
+        starttime (datetime): Process start time
+        endtime (datetime): Process end time
+        last_extract_dt (Optional[datetime]): Last extract datetime
+        success (bool): Whether the process was successful
+        status (str): Status message
+        errormessage (Optional[str]): Error message if any
+    """
+    engine = get_postgres_engine("pg-ssg")
+    try:
+        # Create the ETL log table if it doesn't exist
+        create_etl_hourly_log_odp_table_if_not_exists(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO etl_extract_hourly_log 
+                    (processlogid, source_connection, saved_count, starttime, endtime, lastextractdatetime, success, status, errormessage)
+                    VALUES (:processlogid, :source_connection, :saved_count, :starttime, :endtime, :lastextractdatetime, :success, :status, :errormessage)
+                    """
+                ),
+                {
+                    "processlogid": processlogid,
+                    "source_connection": conn,
+                    "saved_count": saved_count,
+                    "starttime": starttime,
+                    "endtime": endtime,
+                    "lastextractdatetime": last_extract_dt,
+                    "success": success,
+                    "status": status,
+                    "errormessage": errormessage,
+                },
+            )
+        logger.info(f"Inserted ETL log for {conn}")
+    except Exception as e:
+        logger.error(f"Failed to insert ETL log for {conn}: {e}")
+        # Don't raise the exception, just log it
+    finally:
+        dispose_postgres_engine("pg-ssg")
+
+
+@retry_on_exception()
 def fetch_recent_source_data(hours_back=1):
     """
     Fetch recently added data from the source table for the last N hours
@@ -167,10 +407,12 @@ def fetch_recent_source_data(hours_back=1):
     """
     start_time = time.time()
     logger.info(f"Fetching recent data from operator_daily_performance for last {hours_back} hours")
-    
+
+
     try:
         conn = get_database_connection()
         
+        last_extract_dt = get_last_extract_dt_from_log(conn)
         # Select only needed columns instead of SELECT *
         needed_columns = [
             "ODP_Date", "Shift", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName",
@@ -227,8 +469,7 @@ def perform_aggregations(df):
             return {
                 'odp_hourly_oc': pd.DataFrame(),
                 'odp_hourly_shift': pd.DataFrame(),
-                'odp_hourly_employee': pd.DataFrame(),
-                'odp_hourly_summary': pd.DataFrame()
+                'odp_hourly_employee': pd.DataFrame()
             }
         
         # Log available columns for debugging
@@ -237,7 +478,6 @@ def perform_aggregations(df):
         # Create a mapping of expected column names to actual column names in the DataFrame
         column_name_mapping = {
             # Source columns (from database table)
-            'odpd_key': ['ODPD_Key', 'odpd_key'],
             'odp_date': ['ODP_Date', 'odp_date'],
             'shift': ['Shift', 'shift'],
             'odp_em_key': ['ODP_EM_Key', 'odp_em_key'],
@@ -305,8 +545,8 @@ def perform_aggregations(df):
         if 'unloading_qty' in actual_column_names:
             agg_operations_1[actual_column_names['unloading_qty']] = 'sum'
         # Use a column that we know exists for counting
-        if 'odpd_key' in df.columns and 'odpd_key' not in actual_agg1_grouping_cols:
-            agg_operations_1['odpd_key'] = 'count'
+        if 'id' in df.columns and 'id' not in actual_agg1_grouping_cols:
+            agg_operations_1['id'] = 'count'
         else:
             # Find a column that's not in the grouping columns for counting
             for col in df.columns:
@@ -325,19 +565,9 @@ def perform_aggregations(df):
             if 'record_count_temp' in aggregated_df1.columns:
                 aggregated_df1 = aggregated_df1.rename(columns={'record_count_temp': 'record_count'})
             else:
-                # Safely find and rename the count column
-                # Look for columns that were likely used for counting
-                count_candidates = [col for col in aggregated_df1.columns 
-                                  if col in agg_operations_1.keys() and 
-                                     agg_operations_1[col] in ['count', 'sum', 'size']]
-                if count_candidates:
-                    # Use the last count candidate (usually the one we intended)
-                    count_col = count_candidates[-1]
+                count_col = list(agg_operations_1.keys())[-1]  # Get the last aggregated column (the count)
+                if count_col in aggregated_df1.columns:
                     aggregated_df1 = aggregated_df1.rename(columns={count_col: 'record_count'})
-                else:
-                    # If we can't find a proper count column, add a default one
-                    aggregated_df1['record_count'] = 1
-                    logger.warning("Could not find count column in agg1, added default record_count=1")
         else:
             logger.warning("No valid columns for aggregation 1")
             aggregated_df1 = pd.DataFrame()
@@ -367,8 +597,8 @@ def perform_aggregations(df):
         if 'odpd_is_overtime' in actual_column_names:
             agg_operations_2[actual_column_names['odpd_is_overtime']] = 'max'
         # Use a column for counting
-        if 'odpd_key' in df.columns and 'odpd_key' not in actual_agg2_grouping_cols:
-            agg_operations_2['odpd_key'] = 'count'
+        if 'id' in df.columns and 'id' not in actual_agg2_grouping_cols:
+            agg_operations_2['id'] = 'count'
         else:
             # Find a column that's not in the grouping columns for counting
             for col in df.columns:
@@ -387,31 +617,19 @@ def perform_aggregations(df):
             if 'record_count_temp' in aggregated_df2.columns:
                 aggregated_df2 = aggregated_df2.rename(columns={'record_count_temp': 'record_count'})
             else:
-                # Safely find and rename the count column
-                # Look for columns that were likely used for counting
-                count_candidates = [col for col in aggregated_df2.columns 
-                                  if col in agg_operations_2.keys() and 
-                                     agg_operations_2[col] in ['count', 'sum', 'size']]
-                if count_candidates:
-                    # Use the last count candidate (usually the one we intended)
-                    count_col = count_candidates[-1]
+                count_col = list(agg_operations_2.keys())[-1]  # Get the last aggregated column (the count)
+                if count_col in aggregated_df2.columns:
                     aggregated_df2 = aggregated_df2.rename(columns={count_col: 'record_count'})
-                else:
-                    # If we can't find a proper count column, add a default one
-                    aggregated_df2['record_count'] = 1
-                    logger.warning("Could not find count column in agg2, added default record_count=1")
         else:
             logger.warning("No valid columns for aggregation 2")
             aggregated_df2 = pd.DataFrame()
         
-        # Transform 3: Group by Date and Employee details (CORRECTED VERSION)
-        logger.info("Performing aggregation 3: by Date and Employee (CORRECTED)...")
-        
-        # Correct grouping columns that match the target table schema
+        # Transform 3: Group by Date and Employee details
+        logger.info("Performing aggregation 3: by Date and Employee...")
         agg3_grouping_cols_expected = [
             "odp_date", "shift",
-            "odp_em_key",  # This stays as a grouping column
-            "odpd_workstation", "odpd_wc_key",
+            "odp_em_key", "em_rfid", "em_department", "em_first_name", "em_last_name",
+            "odp_current_station", "odpd_workstation", "odpd_wc_key",
             "odpd_st_key", "st_id", "st_description", "odpd_lot_number",
             "odpd_oc_key", "oc_description",
             "odpd_cm_key", "cm_description", "odpd_sm_key", "sm_description",
@@ -422,7 +640,7 @@ def perform_aggregations(df):
         # Map to actual column names
         actual_agg3_grouping_cols = [actual_column_names[col] for col in agg3_grouping_cols_expected if col in actual_column_names]
         
-        # Add EM_Description creation logic to the aggregation operations
+        # Define aggregation operations for aggregation 3
         agg_operations_3 = {}
         if 'odpd_quantity' in actual_column_names and actual_column_names['odpd_quantity'] not in actual_agg3_grouping_cols:
             agg_operations_3[actual_column_names['odpd_quantity']] = 'sum'
@@ -437,8 +655,8 @@ def perform_aggregations(df):
         if 'odpd_overtime_factor' in actual_column_names and actual_column_names['odpd_overtime_factor'] not in actual_agg3_grouping_cols:
             agg_operations_3[actual_column_names['odpd_overtime_factor']] = 'mean'
         # Use a column for counting
-        if 'odpd_key' in df.columns and 'odpd_key' not in actual_agg3_grouping_cols:
-            agg_operations_3[actual_column_names['odpd_key']] = 'count'
+        if 'id' in df.columns and 'id' not in actual_agg3_grouping_cols:
+            agg_operations_3['id'] = 'count'
         else:
             # Find a column that's not in the grouping columns for counting
             for col in df.columns:
@@ -456,154 +674,17 @@ def perform_aggregations(df):
             agg_operations_3[actual_column_names['odp_actual_clock_out']] = 'max'
         
         if actual_agg3_grouping_cols and agg_operations_3:
-            # FIX: Filter out problematic columns with all null values
-            # Specifically, we know 'ODP_Current_Station' has all null values in our data
-            filtered_agg3_grouping_cols = [col for col in actual_agg3_grouping_cols if col != 'ODP_Current_Station']
-            
-            # Create EM_Description column before filtering
-            # Combine employee-related information into a single descriptive column
-            employee_info_cols = ['ODP_EM_Key', 'EM_RFID', 'EM_Department', 'EM_FirstName', 'EM_LastName']
-            employee_cols_present = [col for col in employee_info_cols if col in df.columns]
-            
-            if employee_cols_present:
-                # Create EM_Description by combining available employee columns
-                df['EM_Description'] = ''
-                for i, col in enumerate(employee_cols_present):
-                    if i == 0:
-                        df['EM_Description'] = df[col].fillna('').astype(str)
-                    else:
-                        df['EM_Description'] = df['EM_Description'] + '-' + df[col].fillna('').astype(str)
+            aggregated_df3 = df.groupby(actual_agg3_grouping_cols).agg(agg_operations_3).reset_index()
+            # Rename count column to record_count
+            if 'record_count_temp' in aggregated_df3.columns:
+                aggregated_df3 = aggregated_df3.rename(columns={'record_count_temp': 'record_count'})
             else:
-                # If no employee columns available, use a default
-                df['EM_Description'] = 'Unknown_Employee'
-            
-            # Filter out rows with null values in the grouping columns
-            filtered_df3 = df.dropna(subset=filtered_agg3_grouping_cols)
-            if len(filtered_df3) > 0:
-                # Perform the aggregation
-                aggregated_df3 = filtered_df3.groupby(filtered_agg3_grouping_cols).agg(agg_operations_3).reset_index()
-                
-                # Rename count column to record_count
-                if 'record_count_temp' in aggregated_df3.columns:
-                    aggregated_df3 = aggregated_df3.rename(columns={'record_count_temp': 'record_count'})
-                else:
-                    # Safely find and rename the count column
-                    # Look for columns that were likely used for counting
-                    count_candidates = [col for col in aggregated_df3.columns 
-                                      if col in agg_operations_3.keys() and 
-                                         agg_operations_3[col] in ['count', 'sum', 'size']]
-                    if count_candidates:
-                        # Use the last count candidate (usually the one we intended)
-                        count_col = count_candidates[-1]
-                        aggregated_df3 = aggregated_df3.rename(columns={count_col: 'record_count'})
-                    else:
-                        # If we can't find a proper count column, add a default one
-                        aggregated_df3['record_count'] = 1
-                        logger.warning("Could not find count column, added default record_count=1")
-                
-                # Transform data to match target table structure
-        if not aggregated_df3.empty:
-            logger.info("Transforming employee aggregation data to match target table structure...")
-            
-            # 1. Create EM_Description column by combining employee columns
-            employee_id_cols = ['ODP_EM_Key', 'EM_RFID', 'EM_Department', 'EM_FirstName', 'EM_LastName']
-            employee_cols_present = [col for col in employee_id_cols if col in aggregated_df3.columns]
-            
-            if employee_cols_present:
-                # Create EM_Description by combining available employee columns
-                desc_parts = []
-                for col in employee_cols_present:
-                    desc_parts.append(aggregated_df3[col].fillna('').astype(str))
-                
-                # Combine all parts with '-' separator
-                aggregated_df3['EM_Description'] = desc_parts[0]  # Start with first column
-                for part in desc_parts[1:]:
-                    aggregated_df3['EM_Description'] = aggregated_df3['EM_Description'] + '-' + part
-                
-                # Drop individual employee columns since we now have EM_Description
-                cols_to_drop = [col for col in employee_cols_present if col != 'ODP_EM_Key']  # Keep ODP_EM_Key
-                aggregated_df3 = aggregated_df3.drop(columns=cols_to_drop, errors='ignore')
-                logger.info(f"Dropped individual employee columns: {cols_to_drop}")
-            else:
-                # If no employee columns available, create a default EM_Description
-                aggregated_df3['EM_Description'] = 'Unknown_Employee'
-                logger.info("Created default EM_Description column")
-            
-            # 2. Handle quantity columns
-            # If we have ODPD_Quantity but not Loading_Qty/UnLoading_Qty, 
-            # distribute ODPD_Quantity appropriately or just drop it
-            if 'ODPD_Quantity' in aggregated_df3.columns:
-                if 'Loading_Qty' not in aggregated_df3.columns and 'UnLoading_Qty' not in aggregated_df3.columns:
-                    # If Loading_Qty and UnLoading_Qty don't exist, we can't use ODPD_Quantity
-                    # Just drop it since the target table doesn't expect it
-                    aggregated_df3 = aggregated_df3.drop(columns=['ODPD_Quantity'], errors='ignore')
-                    logger.info("Dropped ODPD_Quantity column (not needed for target table)")
-                # If Loading_Qty and UnLoading_Qty do exist, ODPD_Quantity is redundant, so drop it
-                elif 'Loading_Qty' in aggregated_df3.columns or 'UnLoading_Qty' in aggregated_df3.columns:
-                    aggregated_df3 = aggregated_df3.drop(columns=['ODPD_Quantity'], errors='ignore')
-                    logger.info("Dropped redundant ODPD_Quantity column")
-            
-            # 3. Ensure all required columns are present with proper names
-            required_columns = {
-                'ODP_EM_Key', 'EM_Description', 'ODPD_Workstation', 'ODPD_WC_Key', 
-                'ODPD_ST_Key', 'ST_ID', 'ST_Description', 'ODPD_Lot_Number', 
-                'ODPD_OC_Key', 'OC_Description', 'Loading_Qty', 'UnLoading_Qty', 
-                'OC_Standard_Time', 'ODPD_Actual_Time', 'ODPD_CM_Key', 'CM_Description', 
-                'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 'ODPD_Overtime_Factor', 
-                'ODPD_STPO_Key', 'source_connection'
-            }
-            
-            # Add missing required columns with default values
-            for col in required_columns:
-                if col not in aggregated_df3.columns:
-                    # Add column with appropriate default based on data type
-                    if col.endswith(('_Qty', '_Key', '_STPO_Key', '_CM_Key', '_SM_Key', '_OC_Key')):
-                        aggregated_df3[col] = 0
-                    elif col.endswith(('_Factor', '_Time', '_Standard_Time', '_Actual_Time')):
-                        aggregated_df3[col] = 0.0
-                    elif col.endswith(('_Is_Overtime',)):
-                        aggregated_df3[col] = False
-                    else:
-                        aggregated_df3[col] = ''
-                    logger.info(f"Added missing required column '{col}' with default values")
-            
-            # 4. Add timestamp columns if missing
-            if 'hour_timestamp' not in aggregated_df3.columns:
-                # Use current hour as default
-                current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
-                aggregated_df3['hour_timestamp'] = current_hour
-                logger.info("Added missing hour_timestamp column with current hour")
-            
-            if 'created_at' not in aggregated_df3.columns:
-                aggregated_df3['created_at'] = datetime.now()
-                logger.info("Added missing created_at column with current timestamp")
-            
-            if 'record_count' not in aggregated_df3.columns:
-                # Add record_count with proper integer values (default to 1 for each record)
-                aggregated_df3['record_count'] = 1
-                logger.info("Added missing record_count column with default integer value")
-            
-            # 5. Ensure only target table columns are included
-            target_columns = {
-                'hour_timestamp', 'ODP_Date', 'Shift', 'ODP_EM_Key', 'EM_Description',
-                'ODPD_Workstation', 'ODPD_WC_Key', 'ODPD_ST_Key', 'ST_ID', 'ST_Description',
-                'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'Loading_Qty',
-                'UnLoading_Qty', 'OC_Standard_Time', 'ODPD_Actual_Time', 'ODPD_CM_Key',
-                'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime',
-                'ODPD_Overtime_Factor', 'ODPD_STPO_Key', 'source_connection',
-                'record_count', 'created_at'
-            }
-            
-            # Remove any columns that are not in the target table
-            extra_columns = set(aggregated_df3.columns) - target_columns
-            if extra_columns:
-                aggregated_df3 = aggregated_df3.drop(columns=list(extra_columns), errors='ignore')
-                logger.info(f"Dropped extra columns not in target table: {extra_columns}")
-            
-            logger.info(f"Final employee aggregation data shape: {aggregated_df3.shape}")
-            logger.info(f"Final columns: {list(aggregated_df3.columns)}")
+                count_col = list(agg_operations_3.keys())[-1]  # Get the last aggregated column (the count)
+                if count_col in aggregated_df3.columns:
+                    aggregated_df3 = aggregated_df3.rename(columns={count_col: 'record_count'})
         else:
-            logger.info("No employee aggregation data to transform")
+            logger.warning("No valid columns for aggregation 3")
+            aggregated_df3 = pd.DataFrame()
         
         # Transform 4: Hourly Summary Aggregation
         logger.info("Performing hourly summary aggregation...")
@@ -637,7 +718,7 @@ def perform_aggregations(df):
                 break
         else:
             # If all columns are in grouping columns, create a constant column for counting
-            df_with_hour = df.copy()
+            df_with_hour = df_with_hour.copy()
             df_with_hour['record_count_temp'] = 1
             hourly_agg_operations['record_count_temp'] = 'sum'
         
@@ -655,70 +736,46 @@ def perform_aggregations(df):
             # Include hour_timestamp in grouping
             actual_hourly_grouping_cols_with_hour = ['hour_timestamp'] + actual_hourly_grouping_cols
             
-            # Filter out rows with null values in grouping columns
-            filtered_df4 = df_with_hour.dropna(subset=actual_hourly_grouping_cols_with_hour)
-            if len(filtered_df4) > 0:
-                aggregated_df4 = filtered_df4.groupby(actual_hourly_grouping_cols_with_hour).agg(hourly_agg_operations).reset_index()
-                
-                # Rename columns appropriately
-                if actual_column_names.get('odp_em_key') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odp_em_key']: 'total_employees'})
-                
-                # Rename count column to record_count if it exists
-                if 'record_count_temp' in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={'record_count_temp': 'record_count'})
-                else:
-                    # Safely find and rename the count column
-                    # Look for columns that were likely used for counting
-                    count_candidates = [col for col in aggregated_df4.columns 
-                                      if col in hourly_agg_operations.keys() and 
-                                         hourly_agg_operations[col] in ['count', 'sum', 'size']]
-                    if count_candidates:
-                        # Use the last count candidate (usually the one we intended)
-                        count_col = count_candidates[-1]
-                        aggregated_df4 = aggregated_df4.rename(columns={count_col: 'record_count'})
-                    else:
-                        # If we can't find a proper count column, add a default one
-                        aggregated_df4['record_count'] = 1
-                        logger.warning("Could not find count column in agg4, added default record_count=1")
-                
-                # Rename other columns to match the database schema
-                if actual_column_names.get('odpd_quantity') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odpd_quantity']: 'total_quantity'})
-                if actual_column_names.get('loading_qty') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['loading_qty']: 'total_loading_qty'})
-                if actual_column_names.get('unloading_qty') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['unloading_qty']: 'total_unloading_qty'})
-                if actual_column_names.get('odpd_actual_time') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odpd_actual_time']: 'avg_actual_time'})
-                if actual_column_names.get('st_id') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['st_id']: 'station_id'})
-                if actual_column_names.get('st_description') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['st_description']: 'station_description'})
-                if actual_column_names.get('oc_description') in aggregated_df4.columns:
-                    aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['oc_description']: 'operation_code'})
+            aggregated_df4 = df_with_hour.groupby(actual_hourly_grouping_cols_with_hour).agg(hourly_agg_operations).reset_index()
+            
+            # Rename columns appropriately
+            if actual_column_names.get('odp_em_key') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odp_em_key']: 'total_employees'})
+            
+            # Rename count column to record_count if it exists
+            if 'record_count_temp' in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={'record_count_temp': 'record_count'})
             else:
-                logger.warning("No valid data for hourly summary aggregation after filtering nulls")
-                aggregated_df4 = pd.DataFrame()
+                # Try to find the count column
+                count_cols = [col for col in aggregated_df4.columns if col not in actual_hourly_grouping_cols_with_hour]
+                if count_cols:
+                    count_col = count_cols[-1]  # Get the last non-grouping column
+                    aggregated_df4 = aggregated_df4.rename(columns={count_col: 'record_count'})
+            
+            # Rename other columns to match the database schema
+            if actual_column_names.get('odpd_quantity') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odpd_quantity']: 'total_quantity'})
+            if actual_column_names.get('loading_qty') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['loading_qty']: 'total_loading_qty'})
+            if actual_column_names.get('unloading_qty') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['unloading_qty']: 'total_unloading_qty'})
+            if actual_column_names.get('odpd_actual_time') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['odpd_actual_time']: 'avg_actual_time'})
+            if actual_column_names.get('st_id') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['st_id']: 'station_id'})
+            if actual_column_names.get('st_description') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['st_description']: 'station_description'})
+            if actual_column_names.get('oc_description') in aggregated_df4.columns:
+                aggregated_df4 = aggregated_df4.rename(columns={actual_column_names['oc_description']: 'operation_code'})
         else:
             logger.warning("No valid columns for hourly summary aggregation")
             aggregated_df4 = pd.DataFrame()
         
-        # Add created_at timestamp to all DataFrames and handle null values
+        # Add created_at timestamp to all DataFrames
         current_time = datetime.now()
         for df_agg in [aggregated_df1, aggregated_df2, aggregated_df3, aggregated_df4]:
             if not df_agg.empty:
-                # Fill NaN values in record_count column with 0
-                if 'record_count' in df_agg.columns:
-                    df_agg['record_count'] = df_agg['record_count'].fillna(0)
-                # Set created_at timestamp
                 df_agg['created_at'] = current_time
-                # Add hour_timestamp if not already present (should be added in hourly summary)
-                if 'hour_timestamp' not in df_agg.columns:
-                    # For non-hourly summary tables, we need to add hour_timestamp
-                    # We'll use the current hour for these tables
-                    current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
-                    df_agg['hour_timestamp'] = current_hour
         
         agg_results = {
             'odp_hourly_oc': aggregated_df1,
@@ -914,7 +971,7 @@ def process_hourly_aggregations(**context):
                 'ODPD_STPO_Key', 'source_connection'
             ],
             'odp_hourly_employee': ['hour_timestamp',
-                'ODP_Date', 'Shift', 'ODP_EM_Key',
+                'ODP_Date', 'Shift', 'ODP_EM_Key', 'EM_RFID', 'EM_Department', 'EM_FirstName', 'EM_LastName',
                 'ODPD_Workstation', 'ODPD_WC_Key', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 
                 'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
                 'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 
@@ -962,7 +1019,7 @@ def log_end(**context):
 
 # Define the DAG
 dag = DAG(
-    'hourly_hanger_line_production_upsert',
+    'hourly_hanger_line_production_history_upsert',
     default_args=default_args,
     description='Hourly aggregation of hanger line data and upsert to production tables',
     schedule='0 * * * *',  # Run hourly at the top of each hour
@@ -981,7 +1038,7 @@ start_task = PythonOperator(
 # Task to create production tables if they don't exist
 create_tables_task = PythonOperator(
     task_id='create_production_tables',
-    python_callable=create_production_tables_if_not_exist,
+    python_callable=create_hourly_tables_if_not_exist,
     dag=dag
 )
 

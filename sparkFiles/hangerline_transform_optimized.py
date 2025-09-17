@@ -22,7 +22,7 @@ print(f"Python path: {sys.path}")
 print(f"DAGs path exists: {os.path.exists(dags_path)}")
 print(f"db_utils.py exists: {os.path.exists(os.path.join(dags_path, 'db_utils.py'))}")
 
-from scripts.create_target_production_table_pg import (
+from scripts.create_table_hourly import (
     create_target_table_if_not_exists,
     create_etl_log_odp_table_if_not_exists
 )

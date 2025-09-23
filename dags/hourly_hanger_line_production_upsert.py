@@ -17,6 +17,47 @@ from pendulum import timezone
 from sqlalchemy import create_engine
 from collections import defaultdict
 
+
+def get_database_connection():
+    """
+    Get database connection with proper error handling
+    """
+    try:
+        # Get connection parameters from Airflow connection
+        try:
+            connection = BaseHook.get_connection("pg-ssg")
+            host = connection.host
+            port = connection.port if connection.port else 5432
+            database = connection.schema
+            user = connection.login
+            password = connection.password
+            
+            logger.info(f"Using Airflow connection 'pg-ssg'")
+        except Exception as e:
+            logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
+            # Fallback to environment variables
+            host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+            port = os.getenv("POSTGRES_PORT", "5432")
+            database = os.getenv("POSTGRES_DB", "ssg")
+            user = os.getenv("POSTGRES_USER", "postgres")
+            password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
+        
+        # Connect to PostgreSQL
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+            connect_timeout=30  # Add connection timeout
+        )
+        
+        return conn
+        
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        raise
+
 # Add the scripts directory to the Python path
 scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
 sys.path.append(os.path.abspath(scripts_path))
@@ -59,24 +100,114 @@ default_args = {
     'retry_exponential_backoff': True,
 }
 
-def log_etl_metrics(start_time, records_processed=0, tables_updated=[], status="completed"):
+def log_etl_extraction(
+    process_log_id: str,
+    source_connection: str,
+    extracted_count: int,
+    start_time: float,
+    status: str = "success",
+    error_message: str = None
+) -> bool:
     """
-    Log comprehensive ETL metrics
+    Log ETL extraction details to etl_extract_hourly_log table
+    
+    Args:
+        process_log_id: Unique identifier for this ETL process
+        source_connection: Source connection name
+        extracted_count: Number of records extracted
+        start_time: Start time of the ETL process (for calculating duration)
+        status: Status of the extraction (success, failed, etc.)
+        error_message: Error message if any
+        
+    Returns:
+        bool: True if successful, False otherwise
     """
-    end_time = time.time()
-    duration = end_time - start_time
+    try:
+        # Calculate duration
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        # Create connection
+        conn = get_database_connection()
+        cursor = conn.cursor()
+        
+        # Insert log entry
+        insert_query = """
+            INSERT INTO etl_extract_hourly_log (
+                processlogid, source_connection, saved_count, starttime, endtime,
+                lastextractdatetime, success, status, errormessage
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        
+        # Current timestamps
+        current_time = datetime.now()
+        
+        cursor.execute(insert_query, (
+            process_log_id,
+            source_connection,
+            extracted_count,
+            datetime.fromtimestamp(start_time),
+            current_time,
+            current_time,  # lastextractdatetime - using current time as last extract time
+            status == "success",
+            status,
+            error_message
+        ))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"Successfully logged ETL extraction: {process_log_id} - {extracted_count} records - {status}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error logging ETL extraction: {e}")
+        return False
+
+
+def log_etl_metrics(
+    start_time: float, 
+    records_processed: int, 
+    tables_updated: list, 
+    status: str = "completed"
+) -> bool:
+    """
+    Log comprehensive ETL metrics to monitoring systems
     
-    metrics = {
-        'execution_time_seconds': round(duration, 2),
-        'records_processed': records_processed,
-        'tables_updated': tables_updated,
-        'status': status,
-        'throughput_rps': round(records_processed / duration, 2) if duration > 0 and records_processed > 0 else 0,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    logger.info(f"ETL Metrics: {metrics}")
-    return metrics
+    Args:
+        start_time: Start time of the ETL process
+        records_processed: Number of records processed
+        tables_updated: List of tables that were updated
+        status: Status of the ETL process
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        metrics = {
+            'execution_time_seconds': round(duration, 2),
+            'records_processed': records_processed,
+            'tables_updated': tables_updated,
+            'status': status,
+            'throughput_rps': round(records_processed / duration, 2) if duration > 0 and records_processed > 0 else 0,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        logger.info(f"ETL Metrics: {metrics}")
+        
+        # Also log to etl_extract_hourly_log table
+        process_log_id = f"hourly_hanger_line_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        log_etl_extraction(process_log_id, "pg-ssg", records_processed, start_time, status)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error logging ETL metrics: {e}")
+        return False
 
 def get_database_connection():
     """
@@ -885,7 +1016,10 @@ def process_hourly_aggregations(**context):
     Main function to fetch data, perform aggregations, and upsert results
     """
     start_time = time.time()
+    process_log_id = f"hourly_hanger_line_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
     logger.info("Starting hourly aggregation and upsert process")
+    logger.info(f"Process log ID: {process_log_id}")
     
     try:
         # Fetch recent source data (last 1 hour)
@@ -894,6 +1028,10 @@ def process_hourly_aggregations(**context):
         if source_data.empty:
             logger.info("No recent source data found, skipping aggregations")
             log_etl_metrics(start_time, 0, [], "no_source_data")
+            
+            # Log to etl_extract_hourly_log table even when no data
+            log_etl_extraction(process_log_id, "pg-ssg", 0, start_time, "no_data", "No recent source data found")
+            
             return "No recent source data found, skipping aggregations"
         
         # Perform aggregations
@@ -914,7 +1052,7 @@ def process_hourly_aggregations(**context):
                 'ODPD_STPO_Key', 'source_connection'
             ],
             'odp_hourly_employee': ['hour_timestamp',
-                'ODP_Date', 'Shift', 'ODP_EM_Key',
+                'ODP_Date', 'Shift', 'ODP_EM_Key', 'EM_Description',
                 'ODPD_Workstation', 'ODPD_WC_Key', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 
                 'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
                 'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 
@@ -928,18 +1066,36 @@ def process_hourly_aggregations(**context):
         
         # Upsert each aggregated result
         results = []
+        total_records_upserted = 0
+        tables_with_data = []
+        
         for table_name, aggregated_data in aggregated_results.items():
             key_columns = table_key_columns.get(table_name, [])
-            result = upsert_aggregated_table(table_name, key_columns, aggregated_data)
-            results.append(result)
+            if not aggregated_data.empty:
+                result = upsert_aggregated_table(table_name, key_columns, aggregated_data)
+                results.append(result)
+                record_count = len(aggregated_data)
+                total_records_upserted += record_count
+                tables_with_data.append(table_name)
+                logger.info(f"Upserted {record_count} records to {table_name}")
+            else:
+                logger.info(f"No data to upsert for {table_name}")
         
         logger.info("Hourly aggregation and upsert process completed successfully")
-        log_etl_metrics(start_time, len(source_data), list(aggregated_results.keys()), "success")
+        
+        # Log metrics and to etl_extract_hourly_log table
+        log_etl_metrics(start_time, total_records_upserted, tables_with_data, "success")
+        log_etl_extraction(process_log_id, "pg-ssg", total_records_upserted, start_time, "success")
+        
         return "Hourly aggregation and upsert process completed successfully"
         
     except Exception as e:
         logger.error(f"Error in hourly aggregation process: {e}")
+        
+        # Log error to etl_extract_hourly_log table
+        log_etl_extraction(process_log_id, "pg-ssg", 0, start_time, "error", str(e))
         log_etl_metrics(start_time, 0, [], "error")
+        
         raise
 
 def log_start(**context):

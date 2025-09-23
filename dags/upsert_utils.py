@@ -96,10 +96,13 @@ def upsert_data_via_postgres(
         set_columns = [col for col in columns if col not in key_columns]
         set_clause = ", ".join([f'"{col}" = EXCLUDED."{col}"' for col in set_columns])
         
+        # Create properly quoted column lists for INSERT and SELECT clauses
+        quoted_columns_str = ", ".join([f'"{col}"' for col in columns])
+        
         # UPSERT SQL statement with double quotes for column names
         upsert_sql = f"""
-        INSERT INTO {table_name} ({all_columns_str})
-        SELECT {all_columns_str} FROM {staging_table}
+        INSERT INTO {table_name} ({quoted_columns_str})
+        SELECT {quoted_columns_str} FROM {staging_table}
         ON CONFLICT ({key_columns_str})
         DO UPDATE SET {set_clause};
         """

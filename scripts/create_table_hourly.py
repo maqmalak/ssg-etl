@@ -113,7 +113,7 @@ class OdpHourlyEmployee(Base):
     
     # Composite primary key - using actual database column names
     __table_args__ = (
-        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'ODP_EM_Key', 
+        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'ODP_EM_Key', 'EM_Description',
                                 'ODPD_Workstation', 'ODPD_WC_Key', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 
                                 'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
                                 'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 

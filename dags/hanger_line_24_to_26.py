@@ -356,10 +356,11 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     
     # If no previous extract, get minimum CreationDate from source
     if not last_extract_dt:
-        last_extract_dt = get_min_creation_date_from_source(conn_str)
-        if last_extract_dt:
-            logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
-        else:
+
+        # last_extract_dt = get_min_creation_date_from_source(conn_str)
+        # if last_extract_dt:
+        #     logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
+        # else:
             logger.info(f"[{connection_id}] Could not get min CreationDate from source, fetching all data")
     
     # Build query - FIXED: Removed extra commas in SELECT clause

@@ -409,13 +409,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
         # If we can't get the connection, we can't fetch data
         return
     
-    # If no previous extract, get minimum CreationDate from source
+    # If no previous extract, skip extraction
     if not last_extract_dt:
-        last_extract_dt = get_min_creation_date_from_source(conn_str)
-        if last_extract_dt:
-            logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
-        else:
-            logger.info(f"[{connection_id}] Could not get min CreationDate from source, fetching all data")
+        logger.info(f"[{connection_id}] No previous extract datetime found, skipping extraction")
+        return
     
     # Build optimized query - Removed unnecessary columns and improved query performance
     # Using specific column names instead of * for better performance
@@ -804,9 +801,9 @@ def dynamic_hanger_db_etl_qcr():
                     return False
             else:
                 logger.info(f"[{connection_id}] LAST EXTRACT DATETIME: None (First run or no log)")
-                logger.info(f"[{connection_id}] No previous extract date found → Proceeding to extract")
-                logger.info(f"[{connection_id}] DECISION: SAVE PATH (No previous extract)")
-                return True
+                logger.info(f"[{connection_id}] No previous extract date found → Skipping extraction as per requirement")
+                logger.info(f"[{connection_id}] DECISION: SKIP PATH (No previous extract)")
+                return False
         except Exception as e:
             logger.error(f"[{connection_id}] Error checking for new data: {e}")
             # Check if it's a connection error
@@ -828,9 +825,9 @@ def dynamic_hanger_db_etl_qcr():
                 logger.info(f"[{connection_id}] DECISION: SKIP PATH (Server unavailable, skipping extraction)")
                 return False
             else:
-                # For other errors, it's safer to proceed with extraction
-                logger.info(f"[{connection_id}] DECISION: SAVE PATH (Non-connection error occurred, proceeding for safety)")
-                return True
+                # For other errors, it's safer to skip extraction
+                logger.info(f"[{connection_id}] DECISION: SKIP PATH (Non-connection error occurred, skipping for safety)")
+                return False
     
     @task.branch
     def decide_next_task(connection_id: str, has_new_data: bool) -> str:

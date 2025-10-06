@@ -1,8 +1,10 @@
 venv
 logs/*
+dags_test/*
 !logs/.gitignore
 dags/_pycache_/*
 *_pycache_*
 .vscode
 .idea
 .cfg
+pkg.txt

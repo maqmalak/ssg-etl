@@ -314,7 +314,8 @@ def perform_fixed_aggregations(df):
             if 'created_at' in df_with_hour.columns:
                 df_with_hour['hour_timestamp'] = pd.to_datetime(df_with_hour['created_at']).dt.floor('H')
             else:
-                current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+                # Use PKT timezone for consistent timestamp handling
+                current_hour = datetime.now(PKT).replace(minute=0, second=0, microsecond=0)
                 df_with_hour['hour_timestamp'] = current_hour
             
             # Include hour_timestamp in grouping
@@ -362,7 +363,8 @@ def perform_fixed_aggregations(df):
             aggregated_df4 = pd.DataFrame()
         
         # Add created_at timestamp to all DataFrames
-        current_time = datetime.now()
+        # Use PKT timezone for consistent timestamp handling
+        current_time = datetime.now(PKT)
         for df_agg in [aggregated_df1, aggregated_df2, aggregated_df3, aggregated_df4]:
             if not df_agg.empty:
                 df_agg['created_at'] = current_time

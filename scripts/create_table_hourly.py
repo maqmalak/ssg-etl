@@ -1,155 +1,112 @@
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Date, Float, Boolean, PrimaryKeyConstraint
+from sqlalchemy import (
+    Column, Integer, String, DateTime, Numeric, Text, Date, Float, Boolean,
+    PrimaryKeyConstraint, Table, MetaData
+)
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Table, MetaData
 from datetime import datetime
 
-# Define the target table model
+# Define the base
 Base = declarative_base()
 
-
-class OdpHourlyOc(Base):
-    __tablename__ = 'odp_hourly_oc'
-    
-    # Define columns
-    hour_timestamp = Column('hour_timestamp', DateTime)
-    odp_date = Column('ODP_Date', Date)
-    shift = Column('Shift', String(10))
-    odpd_st_key = Column('ODPD_ST_Key', Integer)
-    st_id = Column('ST_ID', String(50))
-    st_description = Column('ST_Description', String(100))
-    odpd_lot_number = Column('ODPD_Lot_Number', String(50))
-    odpd_oc_key = Column('ODPD_OC_Key', Integer)
-    oc_description = Column('OC_Description', String(100))
-    oc_standard_time = Column('OC_Standard_Time', Numeric(10, 2))
-    odpd_actual_time = Column('ODPD_Actual_Time', Numeric(10, 2))
-    odpd_cm_key = Column('ODPD_CM_Key', Integer)
-    cm_description = Column('CM_Description', String(100))
-    odpd_sm_key = Column('ODPD_SM_Key', Integer)
-    sm_description = Column('SM_Description', String(100))
-    source_connection = Column('source_connection', String(50))
-    odpd_quantity = Column('ODPD_Quantity', Integer)
-    loading_qty = Column('Loading_Qty', Integer)
-    unloading_qty = Column('UnLoading_Qty', Integer)
-    record_count = Column('record_count', Integer)
-    created_at = Column('created_at', DateTime, default=datetime.utcnow)
-    
-    # Composite primary key - using actual database column names
-    __table_args__ = (
-        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 'ODPD_Lot_Number',
-                             'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
-                             'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'source_connection'),
-    )
-
-
-class OdpHourlyShift(Base):
-    __tablename__ = 'odp_hourly_shift'
-    
-    # Define columns
-    hour_timestamp = Column('hour_timestamp', DateTime)
-    odp_date = Column('ODP_Date', Date)
-    shift = Column('Shift', String(10))
-    odpd_quantity = Column('ODPD_Quantity', Integer)
-    odpd_st_key = Column('ODPD_ST_Key', Integer)
-    st_id = Column('ST_ID', String(50))
-    st_description = Column('ST_Description', String(100))
-    odpd_lot_number = Column('ODPD_Lot_Number', String(50))
-    odpd_oc_key = Column('ODPD_OC_Key', Integer)
-    oc_description = Column('OC_Description', String(100))
-    loading_qty = Column('Loading_Qty', Integer)
-    unloading_qty = Column('UnLoading_Qty', Integer)
-    oc_standard_time = Column('OC_Standard_Time', Numeric(10, 2))
-    odpd_actual_time = Column('ODPD_Actual_Time', Numeric(10, 2))
-    odpd_cm_key = Column('ODPD_CM_Key', Integer)
-    cm_description = Column('CM_Description', String(100))
-    odpd_sm_key = Column('ODPD_SM_Key', Integer)
-    sm_description = Column('SM_Description', String(100))
-    odpd_is_overtime = Column('ODPD_Is_Overtime', Boolean)
-    odpd_overtime_factor = Column('ODPD_Overtime_Factor', Float)
-    odpd_stpo_key = Column('ODPD_STPO_Key', Integer)
-    source_connection = Column('source_connection', String(50))
-    record_count = Column('record_count', Integer)
-    created_at = Column('created_at', DateTime, default=datetime.utcnow)
-    
-    # Composite primary key - using actual database column names
-    __table_args__ = (
-        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 
-                             'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
-                             'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 
-                             'ODPD_STPO_Key', 'source_connection'),
-    )
-
-
-class OdpHourlyEmployee(Base):
-    __tablename__ = 'odp_hourly_employee'
-
-    # Define columns
-    hour_timestamp = Column('hour_timestamp', DateTime)
-    odp_date = Column('ODP_Date', Date)
-    shift = Column('Shift', String(10))
-    odp_em_key = Column('ODP_EM_Key', Integer)
-    em_description = Column('EM_Description', String(500))
-    odpd_workstation = Column('ODPD_Workstation', String(50))
-    odpd_wc_key = Column('ODPD_WC_Key', Integer)
-    odpd_st_key = Column('ODPD_ST_Key', Integer)
-    st_id = Column('ST_ID', String(50))
-    st_description = Column('ST_Description', String(100))
-    odpd_lot_number = Column('ODPD_Lot_Number', String(50))
-    odpd_oc_key = Column('ODPD_OC_Key', Integer)
-    oc_description = Column('OC_Description', String(100))
-    loading_qty = Column('Loading_Qty', Integer)
-    unloading_qty = Column('UnLoading_Qty', Integer)
-    oc_standard_time = Column('OC_Standard_Time', Numeric(10, 2))
-    odpd_actual_time = Column('ODPD_Actual_Time', Numeric(10, 2))
-    odpd_cm_key = Column('ODPD_CM_Key', Integer)
-    cm_description = Column('CM_Description', String(100))
-    odpd_sm_key = Column('ODPD_SM_Key', Integer)
-    sm_description = Column('SM_Description', String(100))
-    odpd_is_overtime = Column('ODPD_Is_Overtime', Boolean)
-    odpd_overtime_factor = Column('ODPD_Overtime_Factor', Float)
-    odpd_stpo_key = Column('ODPD_STPO_Key', Integer)
-    source_connection = Column('source_connection', String(50))
-    record_count = Column('record_count', Integer)
-    created_at = Column('created_at', DateTime, default=datetime.utcnow)
-    
-    # Composite primary key - using actual database column names
-    __table_args__ = (
-        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'ODP_EM_Key', 'EM_Description',
-                                'ODPD_Workstation', 'ODPD_WC_Key', 'ODPD_ST_Key', 'ST_ID', 'ST_Description', 
-                                'ODPD_Lot_Number', 'ODPD_OC_Key', 'OC_Description', 'ODPD_CM_Key', 
-                                'CM_Description', 'ODPD_SM_Key', 'SM_Description', 'ODPD_Is_Overtime', 
-                                'ODPD_STPO_Key', 'source_connection'),
-    )
-
-
+# -------------------- Main Table -------------------- #
 class OdpHourlySummary(Base):
     __tablename__ = 'odp_hourly_summary'
-    
-    # Define columns
-    hour_timestamp = Column('hour_timestamp', DateTime)
-    odp_date = Column('ODP_Date', Date)
-    shift = Column('Shift', String(10))
-    station_id = Column('station_id', String(50))
-    station_description = Column('station_description', String(100))
-    operation_code = Column('operation_code', String(100))
+
+    # Keys
+    hour_timestamp = Column('hour_timestamp', DateTime, nullable=False)
+    odp_date = Column('odp_date', Date, nullable=False)
+    shift = Column('shift', String(10), nullable=False)
+    odp_em_key = Column('odp_em_key', Integer, nullable=False)
+    em_description = Column('em_description', String(500))
+    odpd_workstation = Column('odpd_workstation', String(50))
+    odpd_wc_key = Column('odpd_wc_key', Integer)
+    odpd_st_key = Column('odpd_st_key', Integer)
+    st_id = Column('st_id', String(50))
+    st_description = Column('st_description', String(100))
+    odpd_lot_number = Column('odpd_lot_number', String(50))
+    odpd_oc_key = Column('odpd_oc_key', Integer)
+    oc_description = Column('oc_description', String(100))
+    odpd_cm_key = Column('odpd_cm_key', Integer)
+    cm_description = Column('cm_description', String(100))
+    odpd_sm_key = Column('odpd_sm_key', Integer)
+    sm_description = Column('sm_description', String(100))
+    odpd_is_overtime = Column('odpd_is_overtime', Boolean)
+    odpd_stpo_key = Column('odpd_stpo_key', Integer)
+    source_connection = Column('source_connection', String(50), nullable=False)
+
+    # Aggregated KPIs
+
     total_quantity = Column('total_quantity', Integer)
     total_loading_qty = Column('total_loading_qty', Integer)
     total_unloading_qty = Column('total_unloading_qty', Integer)
-    avg_actual_time = Column('avg_actual_time', Numeric(10, 2))
-    total_employees = Column('total_employees', Integer)
-    source_connection = Column('source_connection', String(50))
+    total_actual_time = Column('total_actual_time', Numeric(10, 2))
+    total_standard_time = Column('total_standard_time', Numeric(10, 2))
     record_count = Column('record_count', Integer)
+
+    # Metadata
     created_at = Column('created_at', DateTime, default=datetime.utcnow)
-    
-    # Composite primary key
+
     __table_args__ = (
-        PrimaryKeyConstraint('hour_timestamp', 'ODP_Date', 'Shift', 'station_id', 'station_description', 
-                             'operation_code', 'source_connection'),
+        PrimaryKeyConstraint(
+            'hour_timestamp', 'odp_date', 'shift', 'odp_em_key', 'em_description',
+            'odpd_workstation', 'odpd_wc_key', 'odpd_st_key', 'st_id', 'st_description',
+            'odpd_lot_number', 'odpd_oc_key', 'oc_description', 'odpd_cm_key',
+            'cm_description', 'odpd_sm_key', 'sm_description', 'odpd_is_overtime',
+            'odpd_stpo_key', 'source_connection'
+        ),
     )
 
 
+# -------------------- Staging Table -------------------- #
+class OdpHourlySummaryStaging(Base):
+    __tablename__ = 'odp_hourly_summary_staging'
 
+    # Same schema as main
+    hour_timestamp = Column('hour_timestamp', DateTime, nullable=False)
+    odp_date = Column('odp_date', Date, nullable=False)
+    shift = Column('shift', String(10), nullable=False)
+    odp_em_key = Column('odp_em_key', Integer, nullable=False)
+    em_description = Column('em_description', String(500))
+    odpd_workstation = Column('odpd_workstation', String(50))
+    odpd_wc_key = Column('odpd_wc_key', Integer)
+    odpd_st_key = Column('odpd_st_key', Integer)
+    st_id = Column('st_id', String(50))
+    st_description = Column('st_description', String(100))
+    odpd_lot_number = Column('odpd_lot_number', String(50))
+    odpd_oc_key = Column('odpd_oc_key', Integer)
+    oc_description = Column('oc_description', String(100))
+    odpd_cm_key = Column('odpd_cm_key', Integer)
+    cm_description = Column('cm_description', String(100))
+    odpd_sm_key = Column('odpd_sm_key', Integer)
+    sm_description = Column('sm_description', String(100))
+    odpd_is_overtime = Column('odpd_is_overtime', Boolean)
+    odpd_stpo_key = Column('odpd_stpo_key', Integer)
+    source_connection = Column('source_connection', String(50), nullable=False)
+
+    # Aggregated KPIs
+    total_quantity = Column('total_quantity', Integer)
+    total_loading_qty = Column('total_loading_qty', Integer)
+    total_unloading_qty = Column('total_unloading_qty', Integer)
+    total_actual_time = Column('total_actual_time', Numeric(10, 2))
+    total_standard_time = Column('total_standard_time', Numeric(10, 2))
+    record_count = Column('record_count', Integer)
+
+    created_at = Column('created_at', DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            'hour_timestamp', 'odp_date', 'shift', 'odp_em_key', 'em_description',
+            'odpd_workstation', 'odpd_wc_key', 'odpd_st_key', 'st_id', 'st_description',
+            'odpd_lot_number', 'odpd_oc_key', 'oc_description', 'odpd_cm_key',
+            'cm_description', 'odpd_sm_key', 'sm_description', 'odpd_is_overtime',
+            'odpd_stpo_key', 'source_connection'
+        ),
+    )
+
+
+# -------------------- Log Table -------------------- #
 def create_etl_hourly_log_odp_table_if_not_exists(engine):
-    """Create ETL aggregated OPD_Date base data log table if it doesn't exist."""
+    """Create ETL log table if not exists"""
     meta = MetaData()
     log_table = Table(
         'etl_extract_hourly_log', meta,
@@ -159,7 +116,7 @@ def create_etl_hourly_log_odp_table_if_not_exists(engine):
         Column('saved_count', Integer),
         Column('starttime', DateTime),
         Column('endtime', DateTime),
-        Column('OPD_Date', Date),
+        Column('opd_date', Date),  # ✅ fixed lowercase
         Column('min_created_at', DateTime),
         Column('max_created_at', DateTime),
         Column('lastextractdatetime', DateTime),
@@ -168,9 +125,16 @@ def create_etl_hourly_log_odp_table_if_not_exists(engine):
         Column('errormessage', Text),
         extend_existing=True
     )
-    meta.create_all(engine)  # Will only create if not exists
+    meta.create_all(engine)
     return log_table
 
+
+# -------------------- Create Tables -------------------- #
 def create_hourly_table_if_not_exists(engine):
-    """Create the transactions table if it doesn't exist"""
+    """Create the main + staging tables if not exist"""
+    Base.metadata.create_all(engine)
+
+
+def create_staging_tables_if_not_exists(engine):
+    """Create staging tables if not exist"""
     Base.metadata.create_all(engine)

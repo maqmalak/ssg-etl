@@ -139,8 +139,8 @@ def log_etl_extraction(
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         
-        # Current timestamps
-        current_time = datetime.now()
+        # Current timestamps - using PKT timezone for consistency
+        current_time = datetime.now(PKT)
         
         cursor.execute(insert_query, (
             process_log_id,
@@ -194,13 +194,13 @@ def log_etl_metrics(
             'tables_updated': tables_updated,
             'status': status,
             'throughput_rps': round(records_processed / duration, 2) if duration > 0 and records_processed > 0 else 0,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now(PKT).isoformat()
         }
         
         logger.info(f"ETL Metrics: {metrics}")
         
         # Also log to etl_extract_hourly_log table
-        process_log_id = f"hourly_hanger_line_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        process_log_id = f"hourly_hanger_line_{datetime.now(PKT).strftime('%Y%m%d_%H%M%S')}"
         log_etl_extraction(process_log_id, "pg-ssg", records_processed, start_time, status)
         
         return True
@@ -700,13 +700,13 @@ def perform_aggregations(df):
             
             # 4. Add timestamp columns if missing
             if 'hour_timestamp' not in aggregated_df3.columns:
-                # Use current hour as default
-                current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+                # Use current hour as default - using PKT timezone for consistency
+                current_hour = datetime.now(PKT).replace(minute=0, second=0, microsecond=0)
                 aggregated_df3['hour_timestamp'] = current_hour
                 logger.info("Added missing hour_timestamp column with current hour")
             
             if 'created_at' not in aggregated_df3.columns:
-                aggregated_df3['created_at'] = datetime.now()
+                aggregated_df3['created_at'] = datetime.now(PKT)
                 logger.info("Added missing created_at column with current timestamp")
             
             if 'record_count' not in aggregated_df3.columns:
@@ -780,7 +780,8 @@ def perform_aggregations(df):
             if 'created_at' in df_with_hour.columns:
                 df_with_hour['hour_timestamp'] = pd.to_datetime(df_with_hour['created_at']).dt.floor('H')
             else:
-                current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+                # Use PKT timezone for consistent timestamp handling
+                current_hour = datetime.now(PKT).replace(minute=0, second=0, microsecond=0)
                 df_with_hour['hour_timestamp'] = current_hour
             
             # Include hour_timestamp in grouping
@@ -836,7 +837,8 @@ def perform_aggregations(df):
             aggregated_df4 = pd.DataFrame()
         
         # Add created_at timestamp to all DataFrames and handle null values
-        current_time = datetime.now()
+        # Use PKT timezone for consistent timestamp handling
+        current_time = datetime.now(PKT)
         for df_agg in [aggregated_df1, aggregated_df2, aggregated_df3, aggregated_df4]:
             if not df_agg.empty:
                 # Fill NaN values in record_count column with 0
@@ -848,7 +850,8 @@ def perform_aggregations(df):
                 if 'hour_timestamp' not in df_agg.columns:
                     # For non-hourly summary tables, we need to add hour_timestamp
                     # We'll use the current hour for these tables
-                    current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+                    # Use PKT timezone for consistent timestamp handling
+                    current_hour = datetime.now(PKT).replace(minute=0, second=0, microsecond=0)
                     df_agg['hour_timestamp'] = current_hour
         
         agg_results = {
@@ -1016,7 +1019,7 @@ def process_hourly_aggregations(**context):
     Main function to fetch data, perform aggregations, and upsert results
     """
     start_time = time.time()
-    process_log_id = f"hourly_hanger_line_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    process_log_id = f"hourly_hanger_line_{datetime.now(PKT).strftime('%Y%m%d_%H%M%S')}"
     
     logger.info("Starting hourly aggregation and upsert process")
     logger.info(f"Process log ID: {process_log_id}")

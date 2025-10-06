@@ -41,7 +41,7 @@ def get_postgres_connection_params(connection_id: str = "pg-ssg") -> Dict[str, A
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
+        password = os.getenv("POSTGRES_PASSWORD", "postgres")
     
     return {
         "host": host,
@@ -72,7 +72,7 @@ def detect_database_host() -> str:
             continue
     
     # If we're not in Docker, check environment variable or use localhost
-    host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+    host = os.getenv("POSTGRES_HOST", "172.18.0.3")
     print(f"Using database host: {host}")
     return host
 

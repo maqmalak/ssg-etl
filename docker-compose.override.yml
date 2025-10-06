@@ -46,7 +46,7 @@ services:
       - "5455:5432"
 
     volumes:
-      - postgres-grafan-db-volume:/var/lib/postgresql/data
+      - pg-grafan-db-volume:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 10s
@@ -60,4 +60,4 @@ services:
 #    command: ["postgres", "-c", "config_file=/usr/share/postgresql/14/postgresql.conf"]
 
 volumes:
-  postgres-grafan-db-volume:
+  pg-grafan-db-volume:

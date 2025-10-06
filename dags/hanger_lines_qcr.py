@@ -174,6 +174,7 @@ def get_last_extract_dt_from_log(source_connection: str) -> Optional[datetime]:
                 {"src": source_connection},
             ).scalar()
             logger.info(f"Last extract datetime for {source_connection}: {result}")
+            
             return result
     except Exception as e:
         logger.error(f"Error fetching last extract datetime for {source_connection}: {e}")
@@ -406,7 +407,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             QCR.QCR_Defect_EM_Key as qcr_defect_em_key,
 			EM_QCR.EM_FirstName as defect_em_firstname,
 			EM_QCR.EM_LastName as defect_em_lastname,
-            EM_QCR.EM_RFID as em_rfid,
+            EM_QCR.EM_RFID as defect_em_rfid,
             QCR.QCR_Defect_ST_Key as qcr_defect_st_key,
             QCR.QCR_Defect_OC_Key as qcr_defect_oc_key,
 			[OC_Description] as oc_description,
@@ -490,7 +491,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                         'qcr_defect_em_key': row_dict.get('qcr_defect_em_key'),
                         'defect_em_firstname': row_dict.get('defect_em_firstname'),
                         'defect_em_lastname': row_dict.get('defect_em_lastname'),
-                        'em_rfid': row_dict.get('em_rfid') if row_dict.get('em_rfid') and str(row_dict.get('em_rfid')).strip() != '' else None,
+                        'defect_em_rfid': row_dict.get('defect_em_rfid') if row_dict.get('defect_em_rfid') and str(row_dict.get('defect_em_rfid')).strip() != '' else None,
                         'qcr_defect_st_key': row_dict.get('qcr_defect_st_key'),
                         'qcr_defect_oc_key': row_dict.get('qcr_defect_oc_key'),
                         'oc_description': row_dict.get('oc_description'),
@@ -511,9 +512,9 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                         'sm_description': row_dict.get('sm_description'),
                         'qcr_qcsc_key': str(row_dict.get('qcr_qcsc_key')) if row_dict.get('qcr_qcsc_key') else None,
                         'qcsc_description': row_dict.get('qcsc_description'),
-                        'em_firstname': row_dict.get('em_firstname'),
-                        'em_key': row_dict.get('em_key'),
-                        'em_rfid': row_dict.get('em_rfid') if row_dict.get('em_rfid') and str(row_dict.get('em_rfid')).strip() != '' else None,
+                        'em_repair_firstname': row_dict.get('em_repair_firstname'),
+                        'em_repair_key': row_dict.get('em_repair_key'),
+                        'em_repair_rfid': row_dict.get('em_repair_rfid') if row_dict.get('em_repair_rfid') and str(row_dict.get('em_repair_rfid')).strip() != '' else None,
                         'st_id': row_dict.get('st_id'),
                         'st_description': row_dict.get('st_description'),
                         'stpo_st_key': row_dict.get('stpo_st_key'),

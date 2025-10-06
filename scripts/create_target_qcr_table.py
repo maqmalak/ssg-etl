@@ -38,9 +38,9 @@ class QualityControlRepair(Base):
     qcr_qcsc_key = Column(String(36))                            # GUID
     qcr_hm_key = Column(Integer, nullable=True)
     qcsc_description = Column(String(100))
-    em_firstname = Column(String(100))
-    em_key = Column(Integer)
-    em_rfid = Column(String(50))
+    em_repair_firstname = Column(String(100))
+    em_repair_key = Column(Integer)
+    em_repair_rfid = Column(String(50))
     st_id = Column(String(50))
     st_description = Column(String(100))
     stpo_st_key = Column(Integer)
@@ -55,7 +55,7 @@ class QualityControlRepair(Base):
         # Add indexes for commonly queried columns
         Index('idx_qcr_defect_datetime', 'qcr_defect_datetime'),
         Index('idx_qcr_created_at', 'created_at'),
-        Index('idx_qcr_em_key', 'em_key'),
+        Index('idx_qcr_em_key', 'qcr_defect_em_key'),
         Index('idx_qcr_defect_st_key', 'qcr_defect_st_key'),
         Index('idx_qcr_defect_oc_key', 'qcr_defect_oc_key'),
         Index('idx_qcr_defect_cm_key', 'qcr_defect_cm_key'),
@@ -63,7 +63,7 @@ class QualityControlRepair(Base):
         Index('idx_qcr_source_connection', 'source_connection'),
         Index('idx_qcr_stpo_key', 'qcr_stpo_key'),
         Index('idx_qcr_shift', 'shift'),
-        Index('idx_qcr_defect_em_key', 'qcr_defect_em_key'),
+        Index('idx_qcr_repair_em_key', 'qcr_repair_em_key'),
         # Composite index for common query patterns
         Index('idx_qcr_source_connection_defect_datetime', 'source_connection', 'qcr_defect_datetime'),
         # Add a unique constraint on qcr_key to prevent duplicates

@@ -115,8 +115,8 @@ def get_postgres_engine():
         # Properly encode the password to handle special characters like '@'
         from urllib.parse import quote_plus
         password = quote_plus("P@kistan12")
-        uri = f"postgresql://postgres:{password}@172.18.0.3:5432/ssg"
-        logger.info("Using fallback connection: 172.18.0.3:5432/ssg")
+        uri = f"postgresql://postgres:{password}@172.16.7.6:5432/ssg"
+        logger.info("Using fallback connection: 172.16.7.6:5432/ssg")
     
     # Use connection pooling for better performance with optimized settings
     engine = create_engine(

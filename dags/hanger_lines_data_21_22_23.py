@@ -114,9 +114,11 @@ def hanger_lines_data_21_22_23():
         step = "data-check"
         last_extract_dt = get_last_extract_dt_from_log(connection_id)
         if not last_extract_dt:
-            res = make_result("skipped", step, connection_id, "No previous extract")
-            ti.xcom_push(key=f"{connection_id}_{step}", value=res)
-            raise AirflowSkipException(res["message"])
+            # res = make_result("skipped", step, connection_id, "No previous extract")
+            # ti.xcom_push(key=f"{connection_id}_{step}", value=res)
+            # raise AirflowSkipException(res["message"])
+            logger.info(f"[{connection_id}] No previous extract, fetching all data for initial load")
+            last_extract_dt = datetime(1900, 1, 1)
         try:
             conn_str = build_mssql_conn_str(BaseHook.get_connection(connection_id))
             with pyodbc.connect(conn_str, timeout=30) as conn:

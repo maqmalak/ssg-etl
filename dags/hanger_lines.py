@@ -378,7 +378,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     
     # If no previous extract, skip extraction
     if not last_extract_dt:
-        logger.info(f"[{connection_id}] No previous extract datetime found, skipping extraction")
+        # logger.info(f"[{connection_id}] No previous extract datetime found, skipping extraction")
+
+        logger.info(f"[{connection_id}] No previous extract, fetching all data for initial load")
+        last_extract_dt = datetime(1900, 1, 1)
         return
 
 

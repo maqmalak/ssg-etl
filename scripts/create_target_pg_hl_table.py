@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Date, Float, Boolean, Index
+from sqlalchemy import Column, Integer, String, DateTime, Numeric, Text, Date, Float, Boolean, Index, PrimaryKeyConstraint, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Table, MetaData
 
@@ -27,7 +27,7 @@ class HangerLaneData(Base):
     odp_lump_sum_payment = Column(Numeric(10, 2))
     odp_make_up_pay_rate = Column(Numeric(10, 2))
     odp_last_hanger_start_time = Column(DateTime)
-    odpd_key = Column(String(50))
+    odpd_key = Column(String(50), nullable=False)
     odpd_workstation = Column(String(50))
     odpd_wc_key = Column(Integer)
     odpd_quantity = Column(Integer)
@@ -71,6 +71,7 @@ class HangerLaneData(Base):
         Index('idx_odpd_oc_key', 'odpd_oc_key'),
         Index('idx_odpd_cm_key', 'odpd_cm_key'),
         Index('idx_odpd_sm_key', 'odpd_sm_key'),
+        UniqueConstraint('source_connection', 'odp_key', 'odpd_key', name='uq_source_connection_odpd_key'),
     )
 
 

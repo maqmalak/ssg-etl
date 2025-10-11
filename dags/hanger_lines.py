@@ -28,6 +28,7 @@ from airflow.utils.edgemodifier import Label
 from pendulum import timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert
 
 
 
@@ -417,6 +418,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             [ODPD_OC_Key] AS odpd_oc_key,
             CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN 'Loading' 
                 WHEN [OC_Description] = 'Pressing' THEN 'Un-Loading'
+                WHEN [OC_Description] = 'Unloading' THEN 'Un-Loading'
                 ELSE [OC_Description] END AS oc_description,
             CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN OD.[odpd_quantity] ELSE 0 END AS loading_qty,
             CASE WHEN [OC_Description] = 'Pressing' THEN OD.[odpd_quantity] ELSE 0 END AS unloading_qty,
@@ -453,10 +455,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     
     params = []
     if last_extract_dt:
-        query += " AND OD.created_at > ?"
+        query += " AND ODP_Last_Hanger_Time >= ?"
         params = [last_extract_dt]
         
-    query += " ORDER BY OD.created_at ASC;"
+    query += " ORDER BY ODP_Last_Hanger_Time ASC;"
     
     # Execute query
     try:
@@ -694,5 +696,198 @@ def save_to_postgres(connection_id: str) -> str:
         perform_memory_cleanup()
         
     return f"Saved {saved_count} rows for {connection_id}"
+
+
+@retry_on_exception()
+def upsert_to_postgres(connection_id: str) -> str:
+    """
+    Upsert transactions to PostgreSQL database using source_connection and odpd_key as composite key
+    with optimized memory management.
+    
+    Args:
+        connection_id (str): Source connection identifier
+        
+    Returns:
+        str: Status message
+    """
+    start_time = time.time()
+    logger.info(f"[{connection_id}] Starting data upsert")
+    
+    upserted_count = 0
+    process_start_time = pendulum.now("Asia/Karachi")
+    last_extract_dt = None
+    
+    engine = get_postgres_engine()
+    try:
+        create_table_if_not_exists(engine)
+        
+        # Process data in streaming fashion with memory optimization
+        batch_count = 0
+        for batch in fetch_data_from_source(connection_id):
+            batch_count += 1
+            logger.info(f"[{connection_id}] Processing batch {batch_count}")
+            
+            if batch:  # Only update last_extract_dt if we have data
+                # Get last extract datetime from current batch
+                batch_last_extract_dt = (
+                    max(tx["odp_last_hanger_time"] for tx in batch if tx.get("odp_last_hanger_time"))
+                    if batch else None
+                )
+                if batch_last_extract_dt and (not last_extract_dt or batch_last_extract_dt > last_extract_dt):
+                    last_extract_dt = batch_last_extract_dt
+            
+            # Process in smaller sub-batches for better memory management
+            sub_batch_size = min(500, BATCH_SIZE // 2)  # Smaller sub-batches
+            for i in range(0, len(batch), sub_batch_size):
+                sub_batch = batch[i:i + sub_batch_size]
+                batch_data = []
+                
+                for transaction_data in sub_batch:
+                    # Prepare the data for upsert
+                    try:
+                        # Ensure data is properly formatted
+                        transaction_data['odp_key'] = str(transaction_data.get('odp_key')) if transaction_data.get('odp_key') else None
+                        transaction_data['odpd_key'] = str(transaction_data.get('odpd_key')) if transaction_data.get('odpd_key') else None
+                        transaction_data['source_connection'] = str(transaction_data.get('source_connection', connection_id))
+                        # Add the connection_id to the data if it's not already there
+                        if 'source_connection' not in transaction_data:
+                            transaction_data['source_connection'] = connection_id
+                        
+                        batch_data.append(transaction_data)
+                    except Exception as e:
+                        logger.error(f"Error preparing transaction data for upsert: {e}")
+                        continue
+                        
+                try:
+                    if batch_data:  # Only upsert if we have data
+                        with engine.begin() as conn:
+                            # Create the upsert statement
+                            stmt = insert(HangerLaneData).values(batch_data)
+                            
+                            # Define the conflict target (composite primary key)
+                            stmt = stmt.on_conflict_do_update(
+                                index_elements=['source_connection', 'odp_key', 'odpd_key'],
+                                set_=dict(
+                                    odp_date=stmt.excluded.odp_date,
+                                    shift=stmt.excluded.shift,
+                                    odp_em_key=stmt.excluded.odp_em_key,
+                                    em_rfid=stmt.excluded.em_rfid,
+                                    em_department=stmt.excluded.em_department,
+                                    em_firstname=stmt.excluded.em_firstname,
+                                    em_lastname=stmt.excluded.em_lastname,
+                                    odp_actual_clock_in=stmt.excluded.odp_actual_clock_in,
+                                    odp_actual_clock_out=stmt.excluded.odp_actual_clock_out,
+                                    odp_shift_clock_in=stmt.excluded.odp_shift_clock_in,
+                                    odp_shift_clock_out=stmt.excluded.odp_shift_clock_out,
+                                    odp_first_hanger_time=stmt.excluded.odp_first_hanger_time,
+                                    odp_last_hanger_time=stmt.excluded.odp_last_hanger_time,
+                                    odp_current_station=stmt.excluded.odp_current_station,
+                                    odp_lump_sum_payment=stmt.excluded.odp_lump_sum_payment,
+                                    odp_make_up_pay_rate=stmt.excluded.odp_make_up_pay_rate,
+                                    odp_last_hanger_start_time=stmt.excluded.odp_last_hanger_start_time,
+                                    odpd_workstation=stmt.excluded.odpd_workstation,
+                                    odpd_wc_key=stmt.excluded.odpd_wc_key,
+                                    odpd_quantity=stmt.excluded.odpd_quantity,
+                                    odpd_st_key=stmt.excluded.odpd_st_key,
+                                    st_id=stmt.excluded.st_id,
+                                    st_description=stmt.excluded.st_description,
+                                    odpd_lot_number=stmt.excluded.odpd_lot_number,
+                                    odpd_oc_key=stmt.excluded.odpd_oc_key,
+                                    oc_description=stmt.excluded.oc_description,
+                                    loading_qty=stmt.excluded.loading_qty,
+                                    unloading_qty=stmt.excluded.unloading_qty,
+                                    oc_piece_rate=stmt.excluded.oc_piece_rate,
+                                    oc_standard_time=stmt.excluded.oc_standard_time,
+                                    odpd_standard=stmt.excluded.odpd_standard,
+                                    odpd_actual_time=stmt.excluded.odpd_actual_time,
+                                    odpd_pa_key=stmt.excluded.odpd_pa_key,
+                                    odpd_pay_rate=stmt.excluded.odpd_pay_rate,
+                                    odpd_piece_rate=stmt.excluded.odpd_piece_rate,
+                                    odpd_start_time=stmt.excluded.odpd_start_time,
+                                    odpd_cm_key=stmt.excluded.odpd_cm_key,
+                                    cm_description=stmt.excluded.cm_description,
+                                    odpd_sm_key=stmt.excluded.odpd_sm_key,
+                                    sm_description=stmt.excluded.sm_description,
+                                    odpd_normal_pay_factor=stmt.excluded.odpd_normal_pay_factor,
+                                    odpd_is_overtime=stmt.excluded.odpd_is_overtime,
+                                    odpd_overtime_factor=stmt.excluded.odpd_overtime_factor,
+                                    odpd_edited_by=stmt.excluded.odpd_edited_by,
+                                    odpd_edited_date=stmt.excluded.odpd_edited_date,
+                                    odpd_actual_time_from_reader=stmt.excluded.odpd_actual_time_from_reader,
+                                    odpd_stpo_key=stmt.excluded.odpd_stpo_key,
+                                    created_at=stmt.excluded.created_at
+                
+                                )
+                            )
+                            
+                            conn.execute(stmt)
+                            upserted_count += len(batch_data)
+                            logger.info(f"[{connection_id}] Upserted {len(batch_data)} records in current sub-batch - {upserted_count} total records upserted so far")
+                            
+                except Exception as e:
+                    logger.error(f"Error upserting sub-batch: {e}")
+                    # Don't raise, just continue
+                finally:
+                    # Explicit cleanup
+                    del batch_data
+                    del sub_batch
+                
+            # Memory cleanup after each batch
+            del batch
+            check_memory_and_cleanup(f"{connection_id} - After processing batch {batch_count}")
+            
+        process_end_time = pendulum.now("Asia/Karachi")
+        logger.info(f"[{connection_id}] Successfully upserted {upserted_count} transactions in {time.time() - start_time:.2f} seconds")
+        
+        # Log successful completion
+        if upserted_count > 0:
+            insert_etl_log(
+                str(uuid.uuid4()),
+                connection_id,
+                upserted_count,
+                process_start_time,
+                process_end_time,
+                last_extract_dt,
+                True,
+                "Completed",
+                None,
+            )
+        else:
+            # Even if no data was upserted, log the attempt
+            insert_etl_log(
+                str(uuid.uuid4()),
+                connection_id,
+                upserted_count,
+                process_start_time,
+                process_end_time,
+                last_extract_dt,
+                True,
+                "Completed - No new data",
+                None,
+            )
+        
+    except Exception as e:
+        process_end_time = pendulum.now("Asia/Karachi")
+        logger.error(f"[{connection_id}] Error upserting data to PostgreSQL: {e}")
+        
+        # Log failure
+        insert_etl_log(
+            str(uuid.uuid4()),
+            connection_id,
+            upserted_count,
+            process_start_time,
+            process_end_time,
+            last_extract_dt,
+            False,
+            "Failed",
+            str(e),
+        )
+        # Don't raise the exception, just log it
+    finally:
+        engine.dispose()
+        # Final memory cleanup
+        perform_memory_cleanup()
+        
+    return f"Upserted {upserted_count} rows for {connection_id}"
 
 

@@ -62,7 +62,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
 
 # ---------------- DAG DEFINITION ---------------- #
 @dag(
-    dag_id="hanger_lines_data_21_22-23",
+    dag_id="hanger_lines_data_upsert",
     default_args=default_args,
     schedule="2,12,22,32,42,52 8-23,0-1 * * 1-6",  # ✅ Every 10 min, 8AM–2AM, Mon–Sat
     tags=["ssg", "hangerline", "data", "upsert"],
@@ -124,9 +124,9 @@ def hanger_lines_data_upsert():
         last_extract_dt = get_last_extract_dt_from_log(connection_id)
         if not last_extract_dt:
             logger.info(f"[{connection_id}] No previous extract, full initial load triggered.")
-            res = make_result("skipped", step, connection_id, "No previous extract")
-            ti.xcom_push(key=f"{connection_id}_{step}", value=res)
-            raise AirflowSkipException(res["message"])
+            return make_result("success", step, connection_id, "No previous extract, full load.")
+           
+            # last_extract_dt = datetime(1900, 1, 1)
 
         try:
             conn_str = build_mssql_conn_str(BaseHook.get_connection(connection_id))

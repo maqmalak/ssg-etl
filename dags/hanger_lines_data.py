@@ -354,7 +354,9 @@ def upsert_to_postgres(connection_id: str) -> str:
                     index_elements=["source_connection", "odp_key", "odpd_key"],
                     set_={col.name: stmt.excluded[col.name]
                           for col in HangerLaneData.__table__.columns
-                          if col.name in ("odp_actual_clock_out", "odp_shift_clock_out","odp_last_hanger_time", "odp_last_hanger_start_time", "odpd_quantity", "loading_qty", "unloading_qty", "odpd_standard", "odpd_actual_time", "odpd_start_time", "odpd_edited_by", "odpd_edited_date")}
+                        #   if col.name in ("odp_actual_clock_out", "odp_shift_clock_out","odp_last_hanger_time", "odp_last_hanger_start_time", "odpd_quantity", "loading_qty", "unloading_qty", "odpd_standard", "odpd_actual_time", "odpd_start_time", "odpd_edited_by", "odpd_edited_date")}
+                          if col.name not in ("source_connection", "odp_key", "odpd_key")}
+
                 )
                 conn.execute(stmt)
                 upserted += len(batch)

@@ -43,7 +43,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ssg
     ports:
-      - "5455:5432"
+      - "5435:5432"
 
     volumes:
       - pg-grafan-db-volume:/var/lib/postgresql/data

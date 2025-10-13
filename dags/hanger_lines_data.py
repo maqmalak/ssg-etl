@@ -255,7 +255,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
         LEFT JOIN [IHS_SHARED].[dbo].[Colour_Master] CM ON OD.[odpd_cm_key] = CM.[cm_key]
         LEFT JOIN [IHS_SHARED].[dbo].[Style_Master] ST ON OD.[odpd_st_key] = ST.[st_key]
         LEFT JOIN [IHS_SHARED].[dbo].[Style_Planned_Orders] PO ON OD.[odpd_stpo_key] = PO.[stpo_key]
-        WHERE ODP_Last_Hanger_Time >= ?
+        WHERE ODP_Last_Hanger_Time > ?
         ORDER BY ODP_Last_Hanger_Time ASC;
     """
 

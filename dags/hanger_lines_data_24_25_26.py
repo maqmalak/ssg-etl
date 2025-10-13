@@ -132,7 +132,7 @@ def hanger_lines_data_upsert():
             conn_str = build_mssql_conn_str(BaseHook.get_connection(connection_id))
             with pyodbc.connect(conn_str, timeout=30) as conn:
                 count = conn.cursor().execute(
-                    "SELECT COUNT(*) FROM [IHS].[dbo].[ODP_Master] WHERE ODP_Last_Hanger_Time >= ?",
+                    "SELECT COUNT(*) FROM [IHS].[dbo].[ODP_Master] WHERE ODP_Last_Hanger_Time > ?",
                     [last_extract_dt],
                 ).fetchone()[0]
 

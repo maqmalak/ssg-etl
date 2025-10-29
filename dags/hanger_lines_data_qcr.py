@@ -32,8 +32,8 @@ PKT = timezone("Asia/Karachi")
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    # "start_date": datetime(2025, 10, 3, 15, 18, tzinfo=PKT),
-    "start_date":datetime.now(PKT) - timedelta(minutes=10),
+    "start_date": datetime(2025, 10, 30, 0, 0, tzinfo=PKT),
+    # "start_date":datetime.now(PKT) - timedelta(minutes=10),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(hours=24),

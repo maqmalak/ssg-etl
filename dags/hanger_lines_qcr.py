@@ -17,18 +17,23 @@ import psutil
 import gc
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-import pendulum
-import pyodbc
+
+
 from airflow.decorators import dag, task
-from airflow.hooks.base import BaseHook
+
 from airflow.models import Variable
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import BranchPythonOperator
 from airflow.utils.edgemodifier import Label
 from pendulum import timezone
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
+import pendulum
+import pyodbc
+from airflow.hooks.base import BaseHook
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert
 
 
 # Add the project root to the Python path for script imports
@@ -58,6 +63,22 @@ BATCH_SIZE = 1000
 MAX_MEMORY_USAGE_PERCENT = 80.0  # Maximum memory usage percentage before triggering cleanup
 
 
+# ---------------- MEMORY MANAGEMENT ---------------- #
+def get_memory_usage() -> float:
+    return psutil.virtual_memory().percent
+
+
+def perform_memory_cleanup(operation: str = "GC") -> None:
+    gc.collect()
+    logger.info(f"[MEMORY] {operation} → cleanup done ({get_memory_usage():.2f}%)")
+
+
+def check_memory(operation: str) -> None:
+    usage = get_memory_usage()
+    if usage > MAX_MEMORY_USAGE_PERCENT:
+        logger.warning(f"[MEMORY] High usage ({usage:.2f}%) during {operation}")
+        perform_memory_cleanup(operation)
+
 def get_memory_usage() -> float:
     """Get current memory usage percentage."""
     return psutil.virtual_memory().percent
@@ -82,6 +103,7 @@ def check_memory_and_cleanup(operation: str) -> None:
         logger.warning(f"[MEMORY] High memory usage detected during {operation}")
         perform_memory_cleanup()
         log_memory_usage(f"{operation} - After cleanup")
+
 
 
 def get_postgres_engine():
@@ -699,3 +721,43 @@ def save_to_postgres(connection_id: str) -> str:
     return f"Saved {saved_count} rows for {connection_id}"
 
 
+# ---------------- UPSERT ---------------- #
+@retry_on_exception()
+def upsert_to_postgres(connection_id: str) -> str:
+    start_t = pendulum.now(PKT)
+    engine = get_postgres_engine()
+    create_qcr_table_if_not_exists(engine)
+    upserted, last_dt = 0, None
+    try:
+        for batch in fetch_data_from_source(connection_id) or []:
+            if not batch:
+                continue
+            with engine.begin() as conn:
+                stmt = insert(QualityControlRepair).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["source_connection", "odp_key", "odpd_key"],
+                    set_={col.name: stmt.excluded[col.name]
+                          for col in QualityControlRepair.__table__.columns
+                        #   if col.name in ("odp_actual_clock_out", "odp_shift_clock_out","odp_last_hanger_time", "odp_last_hanger_start_time", "odpd_quantity", "loading_qty", "unloading_qty", "odpd_standard", "odpd_actual_time", "odpd_start_time", "odpd_edited_by", "odpd_edited_date")}
+                          if col.name not in ("source_connection", "odp_key", "odpd_key")}
+
+                )
+                conn.execute(stmt)
+                upserted += len(batch)
+                latest = max((b.get("qcr_defect_datetime") for b in batch if b.get("qcr_defect_datetime")), default=None)
+                if latest and (not last_dt or latest > last_dt):
+                    last_dt = latest
+            check_memory(f"{connection_id} - upsert batch")
+        end_t = pendulum.now(PKT)
+        insert_etl_log(str(uuid.uuid4()), connection_id, upserted, start_t, end_t, last_dt, True, "Completed", None)
+        msg = f"[{connection_id}] ✅ Upserted {upserted} rows"
+        logger.info(msg)
+        return msg
+    except Exception as e:
+        end_t = pendulum.now(PKT)
+        insert_etl_log(str(uuid.uuid4()), connection_id, upserted, start_t, end_t, last_dt, False, "Failed", str(e))
+        logger.error(f"[{connection_id}] ❌ Upsert failed: {e}")
+        return f"Failed upsert for {connection_id}: {e}"
+    finally:
+        engine.dispose()
+        perform_memory_cleanup(connection_id)

@@ -20,7 +20,7 @@ from dags.hanger_lines_qcr import (
     build_mssql_conn_str,
     get_postgres_engine,
     get_last_extract_dt_from_log,
-    save_to_postgres,
+    qcr_upsert_to_postgres
 )
 
 # Logger
@@ -32,8 +32,8 @@ PKT = timezone("Asia/Karachi")
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "start_date": datetime(2025, 10, 30, 0, 0, tzinfo=PKT),
-    # "start_date":datetime.now(PKT) - timedelta(minutes=10),
+    # "start_date": datetime(2025, 1, 1, 0, 0, tzinfo=PKT),
+    "start_date":datetime.now(PKT) - timedelta(minutes=10),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(hours=24),
@@ -57,7 +57,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
     }
 
 @dag(
-    dag_id="hangerlines_data_qcr",
+    dag_id="hanger_lines_data_qcr",
     default_args=default_args,
     # schedule=timedelta(minutes=5),
     schedule="*/5 8-23,0-1 * * 1-6",  # ✅ Every 5 min, 8AM–2AM, Mon–Sat
@@ -65,7 +65,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
     max_active_runs=1,
     description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL",
 )
-def hangerlines_data_qcr():
+def hanger_lines_data_qcr():
     start = EmptyOperator(task_id="start", doc_md="### 🚀 Pipeline Start")
     end = EmptyOperator(task_id="end", doc_md="### ✅ Pipeline End")
 
@@ -143,45 +143,66 @@ def hangerlines_data_qcr():
         ti.xcom_push(key=f"{connection_id}_{step}", value=res)
         return res
 
-    @task
-    def save_data_to_postgres_task(connection_id: str, ti=None) -> dict:
-        step = "save"
+    # ---------------- UPSERT TASK ---------------- #
+    @task(trigger_rule="none_failed_min_one_success")
+    def upsert_task(connection_id: str) -> dict:
+        step = "upsert"
         try:
-            msg = save_to_postgres(connection_id)
-            res = make_result("success", step, connection_id, msg)
-            ti.xcom_push(key=f"{connection_id}_{step}", value=res)
-            return res
+            msg = qcr_upsert_to_postgres(connection_id)
+            logger.info(f"[{connection_id}] ✅ {msg}")
+            return make_result("success", step, connection_id, msg)
         except Exception as e:
-            res = make_result("fail", step, connection_id, f"Save failed: {e}")
-            ti.xcom_push(key=f"{connection_id}_{step}", value=res)
-            return res
+            msg = f"Upsert failed: {e}"
+            logger.error(f"[{connection_id}] ❌ {msg}")
+            return make_result("fail", step, connection_id, msg)
 
+    # ---------------- SUMMARY ---------------- #
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def summarize_results(conn_ids: list, ti=None) -> dict:
-        summary = {"totals": {"success": 0, "failed": 0, "skipped": 0}, "details": {}}
+        """
+        Collects results from all line task groups and prints a formatted summary.
+        """
+        summary = {"success": 0, "fail": 0, "skipped": 0, "details": {}}
+        report_lines = []
+        separator = "─" * 70
+
+        logger.info("\n" + separator)
+        logger.info("📊 FINAL ETL SUMMARY")
+        logger.info(separator)
 
         for cid in conn_ids:
             steps = []
-            for step in ["source", "target", "data-check", "extract", "save"]:
-                step_result = ti.xcom_pull(key=f"{cid}_{step}")
-                if step_result:
-                    steps.append(step_result)
+            for step in ["source", "target", "data-check", "extract", "upsert"]:
+                # ✅ FIX: prefix group name so XCom paths match TaskGroup IDs
+                tid = f"line_{cid}.{step}_{cid}"
+                result = ti.xcom_pull(task_ids=tid)
+                if result:
+                    steps.append(result)
+                    summary[result["status"]] = summary.get(result["status"], 0) + 1
+
             if not steps:
                 steps = [make_result("skipped", "pipeline", cid, "No steps executed")]
 
             summary["details"][cid] = steps
-            for s in steps:
-                summary["totals"][s["status"]] = summary["totals"].get(s["status"], 0) + 1
 
-        logger.info("=== ETL SUMMARY ===")
-        for cid, steps in summary["details"].items():
-            logger.info(f"📌 {cid}")
-            for s in steps:
-                logger.info(f"   {s['friendly']}")
-        logger.info(f"TOTALS → {json.dumps(summary['totals'])}")
-        logger.info("===================")
+            # 🧩 Build formatted line summary
+            line_status = "✅ SUCCESS"
+            if any(s["status"] == "fail" for s in steps):
+                line_status = "❌ FAIL"
+            elif all(s["status"] == "skipped" for s in steps):
+                line_status = "⚠️ SKIPPED"
 
-        ti.xcom_push(key="summary", value=summary)
+            report_lines.append(f"\n📦 {cid}: {line_status}")
+            for s in steps:
+                emoji = {"success": "✅", "fail": "❌", "skipped": "⚠️"}.get(s["status"], "ℹ️")
+                report_lines.append(f"   {emoji} {s['step'].capitalize():<10} → {s['message']}")
+
+        # 🧾 Print formatted table
+        logger.info("\n".join(report_lines))
+        logger.info(separator)
+        logger.info(f"📈 Totals → ✅ {summary['success']} | ⚠️ {summary['skipped']} | ❌ {summary['fail']}")
+        logger.info(separator)
+
         return summary
 
     # ---------------- DYNAMIC BUILD with GROUPS ---------------- #
@@ -191,14 +212,14 @@ def hangerlines_data_qcr():
             tgt = check_target_connection.override(task_id=f"target_check_{conn_id}")(conn_id)
             dat = check_for_new_data.override(task_id=f"data_check_{conn_id}")(conn_id)
             ext = extract_from_source.override(task_id=f"extract_{conn_id}")(conn_id)
-            sav = save_data_to_postgres_task.override(task_id=f"save_{conn_id}")(conn_id)
-
-            src >> tgt >> dat >> ext >> sav
-            leaf_tasks.append(sav)
+            # sav = save_data_to_postgres_task.override(task_id=f"save_{conn_id}")(conn_id)
+            ups = upsert_task.override(task_id=f"upsert_{conn_id}")(conn_id)
+            src >> tgt >> dat >> ext >> ups
+            leaf_tasks.append(ups)
 
         start >> tg >> end
 
     summary = summarize_results.override(task_id="summary")(SOURCE_HANGER_LANE)
     leaf_tasks >> summary >> end
 
-dag = hangerlines_data_qcr()
+dag = hanger_lines_data_qcr()

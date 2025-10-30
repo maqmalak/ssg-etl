@@ -1,0 +1,10 @@
+/home/maqmalak/.local/lib/python3.10/site-packages/airflow/api_fastapi/auth/tokens.py:522 DeprecationWarning: The secret_key option in [webserver] has been moved to the secret_key option in [api] - the old setting has been used, but please update your config.
+[2025-10-30 16:22:05 +0500] [512489] [INFO] Starting gunicorn 23.0.0
+[2025-10-30 16:22:05 +0500] [512489] [INFO] Listening at: http://[::]:8793 (512489)
+[2025-10-30 16:22:05 +0500] [512489] [INFO] Using worker: sync
+[2025-10-30 16:22:05 +0500] [512490] [INFO] Booting worker with pid: 512490
+[2025-10-30 16:22:05 +0500] [512491] [INFO] Booting worker with pid: 512491
+[2025-10-30 16:28:20 +0500] [512489] [INFO] Handling signal: term
+[2025-10-30 16:28:20 +0500] [512491] [INFO] Worker exiting (pid: 512491)
+[2025-10-30 16:28:20 +0500] [512490] [INFO] Worker exiting (pid: 512490)
+[2025-10-30 16:28:21 +0500] [512489] [INFO] Shutting down: Master

@@ -12,6 +12,7 @@ class QualityControlRepair(Base):
     qcr_key = Column(String(36), nullable=False)                 # UUID
     qcr_stpo_key = Column(Integer)
     qcr_defect_datetime = Column(DateTime)
+    qcr_date = Column(Date)                                       # Date part of defect datetime
     shift = Column(String(10))                                   # "Day"/"Night"
     qcr_defect_em_key = Column(Integer)
     defect_em_firstname = Column(String(100))
@@ -54,7 +55,7 @@ class QualityControlRepair(Base):
     __table_args__ = (
         # Add indexes for commonly queried columns
         Index('idx_qcr_defect_datetime', 'qcr_defect_datetime'),
-        Index('idx_qcr_created_at', 'created_at'),
+        Index('idx_qcr_date', 'qcr_date'),
         Index('idx_qcr_em_key', 'qcr_defect_em_key'),
         Index('idx_qcr_defect_st_key', 'qcr_defect_st_key'),
         Index('idx_qcr_defect_oc_key', 'qcr_defect_oc_key'),
@@ -65,9 +66,9 @@ class QualityControlRepair(Base):
         Index('idx_qcr_shift', 'shift'),
         Index('idx_qcr_repair_em_key', 'qcr_repair_em_key'),
         # Composite index for common query patterns
-        Index('idx_qcr_source_connection_defect_datetime', 'source_connection', 'qcr_defect_datetime'),
+        Index('idx_qcr_source_connection_defect_datetime', 'source_connection', 'qcr_date'),
         # Add a unique constraint on qcr_key to prevent duplicates
-        UniqueConstraint('qcr_key', name='uq_qcr_key')
+        UniqueConstraint('qcr_key', 'source_connection',name='uq_qcr_key')
     )
 
 

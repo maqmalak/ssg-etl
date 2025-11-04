@@ -121,7 +121,7 @@ def hanger_lines_data_qcr():
             conn_str = build_mssql_conn_str(BaseHook.get_connection(connection_id))
             with pyodbc.connect(conn_str, timeout=30) as conn:
                 count = conn.cursor().execute(
-                    "SELECT COUNT(*) FROM [IHS_SHARED].[dbo].QC_Rework WHERE QCR_Defect_DateTime > ?",
+                    "SELECT COUNT(*) FROM lnk_svr.IHS_SHARED.dbo.QC_Rework WHERE QCR_Defect_DateTime > ?",
                     [last_extract_dt],
                 ).fetchone()[0]
                 if count == 0:

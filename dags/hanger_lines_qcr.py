@@ -195,66 +195,118 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     # SQL Query (fully aligned)
     query = """
         SELECT
-            QCR_Key as qcr_key,
-            QCR.QCR_STPO_Key as qcr_stpo_key,
-            QCR.QCR_Defect_DateTime as qcr_defect_datetime,
             CASE
-                WHEN DATEPART(HOUR, QCR.QCR_Defect_DateTime) >= 8
-                    THEN CONVERT(DATETIME, CONVERT(CHAR(10), QCR.QCR_Defect_DateTime, 120))
-                ELSE DATEADD(DAY, -1, CONVERT(DATETIME, CONVERT(CHAR(10), QCR.QCR_Defect_DateTime, 120)))
+                WHEN DATEPART(HOUR, QC_Rework_1.QCR_Defect_DateTime) >= 8
+                    THEN CONVERT(DATE, QC_Rework_1.QCR_Defect_DateTime)
+                ELSE DATEADD(DAY, -1, CONVERT(DATE, QC_Rework_1.QCR_Defect_DateTime))
             END AS qcr_date,
             CASE 
-                WHEN CAST(QCR.QCR_Defect_DateTime AS TIME) BETWEEN '08:00:00' AND '17:00:00' 
+                WHEN CAST(QC_Rework_1.QCR_Defect_DateTime AS TIME) BETWEEN '08:00:00' AND '17:00:00' 
                 THEN 'Day' 
                 ELSE 'Night' 
             END as shift,
-            QCR.QCR_Defect_EM_Key as qcr_defect_em_key,
-			EM_QCR.EM_FirstName as defect_em_firstname,
-			EM_QCR.EM_LastName as defect_em_lastname,
-            EM_QCR.EM_RFID as defect_em_rfid,
-            QCR.QCR_Defect_ST_Key as qcr_defect_st_key,
-            QCR.QCR_Defect_OC_Key as qcr_defect_oc_key,
-			[OC_Description] as oc_description,
-            QCR.QCR_Sent_To_Rework_By_EM_Key as qcr_sent_to_rework_by_em_key,
-            QCR.QCR_Defect_Quantity as qcr_defect_quantity,
-            QCR.QCR_From_QC_Station as qcr_from_qc_station,
-            QCR.QCR_HM_ID as qcr_hm_id,
-            QCR.QCR_QC_DateTime as qcr_qc_datetime,
-            QCR.QCR_Repair_EM_Key as qcr_repair_em_key,
-			EM_REPAIR.EM_FirstName as em_repair_firstname,
-			EM_REPAIR.EM_lastName as em_repair_lastname,
-            EM_REPAIR.EM_RFID as em_repair_rfid,
-            QCR.QCR_Repair_DateTime as qcr_repair_datetime,
-            QCR.QCR_Repair_Quantity as qcr_repair_quantity,
-            QCR.QCR_Defect_CM_Key as qcr_defect_cm_key,
-    		[CM_Description] as cm_description,
-            QCR.QCR_Defect_SM_Key as qcr_defect_sm_key,
-			[SM_Description] as sm_description,
-            QCR.QCR_QCSC_Key as qcr_qcsc_key,
-            QCR.QCR_HM_Key as qcr_hm_key,
-            QSC.QCSC_Description as qcsc_description,
-            ST.ST_ID as st_id,
-            ST.ST_Description as st_description,
-            SPO.STPO_ST_Key as stpo_st_key,
-            SPO.STPO_ID as stpo_id,
-            SPO.STPO_CI_Name as stpo_ci_name
+            QC_Rework_1.QCR_Key AS qcr_key,
+            QC_Rework_1.QCR_Defect_EM_Key AS qcr_defect_em_key,
+            EM_Master_Defect.EM_FirstName AS defect_em_firstname,
+            EM_Master_Defect.EM_LastName AS defect_em_lastname,
+            QC_Rework_1.QCR_Defect_Quantity AS qcr_defect_quantity,
+            QC_Rework_1.QCR_Defect_ST_Key AS qcr_defect_st_key,
+            Style_Master_1.ST_ID AS st_id,
+            Style_Master_1.ST_Description AS st_description,
+            Style_Master_1.ST_Collection AS st_collection,
+            QC_Rework_1.QCR_Defect_OC_Key AS qcr_defect_oc_key,
+            Operation_Codes_1.OC_Description AS oc_description,
+            Primary_Codes_1.PC_Description AS pc_description,
+            Style_Operations_1.STOP_Number AS st_po_number,
+            QC_Rework_1.QCR_Defect_CM_Key AS qcr_defect_cm_key,
+            Colour_Master_1.CM_Short_Description AS cm_short_description,
+            Colour_Master_1.CM_Description AS cm_description,
+            QC_Rework_1.QCR_Defect_SM_Key AS qcr_defect_sm_key,
+            Size_Master_1.SM_Short_Description AS sm_short_description,
+            Size_Master_1.SM_Description AS sm_description,
+            QC_Rework_1.QCR_QCSC_Key AS qcr_qcsc_key,
+            QC_Sub_Codes_1.QCSC_Description AS qcsc_description,
+            QC_Sub_Codes_1.QCSC_Is_Rework AS qcsc_is_rework,
+
+            QC_Rework_1.QCR_From_QC_Station AS qcr_station,
+            QC_Rework_1.QCR_QC_DateTime AS qcr_defect_datetime,
+            QC_Rework_1.QCR_Repair_EM_Key AS qcr_repair_em_key,
+            EM_Master_Rework.EM_FirstName AS em_repair_firstname,
+            EM_Master_Rework.EM_LastName AS em_repair_lastname,
+            QC_Rework_1.QCR_Repair_DateTime AS qcr_repair_datetime,
+            QC_Rework_1.QCR_Repair_Quantity AS qcr_repair_quantity,
+
+            EM_Master_QC.EM_Department AS qcr_oc_em_department,
+            EM_Master_QC.EM_SSN AS qcr_qc_em_ssn,
+            EM_Master_QC.EM_City AS qcr_qc_em_city,
+            EM_Master_Defect.EM_Department AS qcr_defect_em_department,
+            EM_Master_Defect.EM_SSN AS qcr_defect_em_ssn,
+            EM_Master_Defect.EM_City AS qcr_defect_em_city,
+            EM_Master_Rework.EM_Department AS qcr_repair_em_department,
+            EM_Master_Rework.EM_SSN AS qcr_repair_em_ssn,
+            EM_Master_Rework.EM_City AS qcr_repair_em_city,
+
+            EM_Master_Defect.EM_LCD_Name AS qcr_defect_em_lcd_name,
+            EM_Master_QC.EM_LCD_Name AS qcr_qc_em_lcd_name,
+            EM_Master_Rework.EM_LCD_Name AS qcr_repair_em_lcd_name,
+
+            CASE 
+                WHEN Style_Master_1.ST_Line=1 THEN 'line-21'
+                WHEN Style_Master_1.ST_Line=2 THEN 'line-22'
+                WHEN Style_Master_1.ST_Line=3 THEN 'line-23'
+                WHEN Style_Master_1.ST_Line=4 THEN 'line-24'
+                WHEN Style_Master_1.ST_Line=5 THEN 'line-25'
+                WHEN Style_Master_1.ST_Line=6 THEN 'line-26'
+                WHEN Style_Master_1.ST_Line=7 THEN 'line-27'
+                WHEN Style_Master_1.ST_Line=8 THEN 'line-28'
+                WHEN Style_Master_1.ST_Line=9 THEN 'line-29'
+            else 'unknown' END AS source_line,    
+            QC_Rework_1.QCR_STPO_Key AS qcr_stpo_key
+
         FROM
-            [IHS_SHARED].[dbo].QC_Rework QCR
-            INNER JOIN [IHS_SHARED].[dbo].QC_Sub_Codes QSC ON QCR.QCR_QCSC_Key = QSC.QCSC_Key
-			INNER JOIN [IHS_SHARED].[dbo].Employee_Master EM_QCR ON QCR.QCR_Defect_EM_Key = EM_QCR.EM_Key
-            LEFT JOIN [IHS_SHARED].[dbo].Employee_Master EM_REPAIR ON QCR.QCR_Repair_EM_Key = EM_REPAIR.EM_Key
-            LEFT JOIN [IHS_SHARED].[dbo].Style_Master ST ON QCR.QCR_Defect_ST_Key = ST.ST_Key
-            LEFT JOIN [IHS_SHARED].[dbo].Style_Planned_Orders SPO ON QCR.QCR_STPO_Key = SPO.STPO_Key
-			LEFT JOIN [IHS_SHARED].[dbo].[Operation_Codes] OC ON QCR.[QCR_Defect_OC_Key] = OC.[oc_key]
-			LEFT JOIN [IHS_SHARED].[dbo].[Size_Master] SM ON QCR.[QCR_Defect_SM_Key] = SM.[sm_key]
-			LEFT JOIN [IHS_SHARED].[dbo].[Colour_Master] CM ON QCR.[QCR_Defect_CM_Key] = CM.[cm_key]
+        lnk_svr.IHS_SHARED.dbo.Style_Master AS Style_Master_1
+        INNER JOIN lnk_svr.IHS_SHARED.dbo.Style_Operations_Master AS Style_Operations_Master_1 
+            ON Style_Master_1.ST_STOPM_Key = Style_Operations_Master_1.STOPM_Key
+        INNER JOIN lnk_svr.IHS_SHARED.dbo.Style_Operations AS Style_Operations_1 
+            ON Style_Operations_Master_1.STOPM_Key = Style_Operations_1.STOP_STOPM_Key
+        RIGHT OUTER JOIN lnk_svr.IHS_SHARED.dbo.QC_Rework AS QC_Rework_1 
+            ON Style_Operations_1.STOP_OC_Key = QC_Rework_1.QCR_Defect_OC_Key
+        AND Style_Master_1.ST_Key = QC_Rework_1.QCR_Defect_ST_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Size_Master AS Size_Master_1 
+            ON Size_Master_1.SM_Key = QC_Rework_1.QCR_Defect_SM_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Colour_Master AS Colour_Master_1 
+            ON QC_Rework_1.QCR_Defect_CM_Key = Colour_Master_1.CM_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Operation_Codes AS Operation_Codes_1 
+            ON QC_Rework_1.QCR_Defect_OC_Key = Operation_Codes_1.OC_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Primary_Codes AS Primary_Codes_1 
+            ON Primary_Codes_1.PC_Key = Operation_Codes_1.OC_PC_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.QC_Sub_Codes AS QC_Sub_Codes_1 
+            ON QC_Rework_1.QCR_QCSC_Key = QC_Sub_Codes_1.QCSC_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Employee_Master AS EM_Master_Defect 
+            ON QC_Rework_1.QCR_Defect_EM_Key = EM_Master_Defect.EM_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Employee_Master AS EM_Master_Rework 
+            ON QC_Rework_1.QCR_Repair_EM_Key = EM_Master_Rework.EM_Key
+        LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Employee_Master AS EM_Master_QC 
+            ON QC_Rework_1.QCR_Sent_To_Rework_By_EM_Key = EM_Master_QC.EM_Key
         WHERE QCR_Defect_DateTime > ?
+        AND CASE 
+                WHEN Style_Master_1.ST_Line=1 THEN 'line-21'
+                WHEN Style_Master_1.ST_Line=2 THEN 'line-22'
+                WHEN Style_Master_1.ST_Line=3 THEN 'line-23'
+                WHEN Style_Master_1.ST_Line=4 THEN 'line-24'
+                WHEN Style_Master_1.ST_Line=5 THEN 'line-25'
+                WHEN Style_Master_1.ST_Line=6 THEN 'line-26'
+                WHEN Style_Master_1.ST_Line=7 THEN 'line-27'
+                WHEN Style_Master_1.ST_Line=8 THEN 'line-28'
+                WHEN Style_Master_1.ST_Line=9 THEN 'line-29'
+            else 'unknown' END = ?
+
         ORDER BY QCR_Defect_DateTime ASC;
         """
 
     with pyodbc.connect(conn_str, timeout=30) as c:
         cur = c.cursor()
-        cur.execute(query, [last_extract_dt])
+        cur.execute(query, [last_extract_dt, connection_id])
         total, batch_no = 0, 0
 
         while True:
@@ -303,7 +355,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "stpo_id": d.get("stpo_id"),
                     "stpo_ci_name": d.get("stpo_ci_name"),
                     'created_at': datetime.now(PKT),
-                    'source_connection': connection_id
+                    'source_connection': d.get("source_line"),
 
                 })
 

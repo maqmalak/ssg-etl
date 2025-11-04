@@ -195,66 +195,95 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     # SQL Query (fully aligned)
     query = """
         SELECT
-            [ODP_Date] AS odp_date,
-            [ODP_Key] AS odp_key,
+            IHS.dbo.ODP_Master.ODP_Date AS odp_date,
+            IHS.dbo.ODP_Master.ODP_Key AS odp_key,
+            IHS.dbo.ODP_Master.ODP_Shift AS odp_shift_key,
             CASE WHEN [ODP_Shift] = 1 THEN 'Day' ELSE 'Night' END AS shift,
-            [ODP_EM_Key] AS odp_em_key,
-            [EM_RFID] AS em_rfid,
-            [EM_Department] AS em_department,
-            [EM_FirstName] AS em_firstname,
-            [EM_LastName] AS em_lastname,
-            [ODP_Actual_Clock_In] AS odp_actual_clock_in,
-            [ODP_Actual_Clock_Out] AS odp_actual_clock_out,
-            [ODP_Shift_Clock_In] AS odp_shift_clock_in,
-            [ODP_Shift_Clock_Out] AS odp_shift_clock_out,
-            [ODP_First_Hanger_Time] AS odp_first_hanger_time,
-            [ODP_Last_Hanger_Time] AS odp_last_hanger_time,
-            [ODP_Current_Station] AS odp_current_station,
-            [ODP_Lump_Sum_Payment] AS odp_lump_sum_payment,
-            [ODP_Make_Up_Pay_Rate] AS odp_make_up_pay_rate,
-            [ODP_Last_Hanger_Start_Time] AS odp_last_hanger_start_time,
-            [ODPD_Key] AS odpd_key,
-            [ODPD_Workstation] AS odpd_workstation,
-            [ODPD_WC_Key] AS odpd_wc_key,
-            [ODPD_Quantity] AS odpd_quantity,
-            [ODPD_ST_Key] AS odpd_st_key,
-            [ST_ID] AS st_id,
-            [ST_Description] AS st_description,
-            [ODPD_Lot_Number] AS odpd_lot_number,
-            [ODPD_OC_Key] AS odpd_oc_key,
-            CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN 'Loading' 
-                 WHEN [OC_Description] IN ('Pressing','Unloading') THEN 'Un-Loading'
-                 ELSE [OC_Description] END AS oc_description,
-            CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN OD.[odpd_quantity] ELSE 0 END AS loading_qty,
-            CASE WHEN [OC_Description] IN ('Pressing','Unloading') THEN OD.[odpd_quantity] ELSE 0 END AS unloading_qty,
-            [OC_Piece_Rate] AS oc_piece_rate,
-            [OC_Standard_Time] AS oc_standard_time,
-            [ODPD_Standard] AS odpd_standard,
-            [ODPD_Actual_Time] AS odpd_actual_time,
-            [ODPD_PA_Key] AS odpd_pa_key,
-            [ODPD_Pay_Rate] AS odpd_pay_rate,
-            [ODPD_Piece_Rate] AS odpd_piece_rate,
-            [ODPD_Start_Time] AS odpd_start_time,
-            [ODPD_CM_Key] AS odpd_cm_key,
-            [CM_Description] AS cm_description,
-            [ODPD_SM_Key] AS odpd_sm_key,
-            [SM_Description] AS sm_description,
-            [ODPD_Normal_Pay_Factor] AS odpd_normal_pay_factor,
-            [ODPD_Is_Overtime] AS odpd_is_overtime,
-            [ODPD_Overtime_Factor] AS odpd_overtime_factor,
-            [ODPD_Edited_By] AS odpd_edited_by,
-            [ODPD_Edited_Date] AS odpd_edited_date,
-            [ODPD_Actual_Time_From_Reader] AS odpd_actual_time_from_reader,
-            [ODPD_STPO_Key] AS odpd_stpo_key,
-            [created_at] AS created_at
-        FROM [IHS].[dbo].[ODP_Detail] OD
-        INNER JOIN [IHS].[dbo].[ODP_Master] OM ON OD.[odpd_odp_key] = OM.[odp_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Employee_Master] EM ON OM.[odp_em_key] = EM.[em_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Operation_Codes] OC ON OD.[odpd_oc_key] = OC.[oc_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Size_Master] SM ON OD.[odpd_sm_key] = SM.[sm_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Colour_Master] CM ON OD.[odpd_cm_key] = CM.[cm_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Style_Master] ST ON OD.[odpd_st_key] = ST.[st_key]
-        LEFT JOIN [IHS_SHARED].[dbo].[Style_Planned_Orders] PO ON OD.[odpd_stpo_key] = PO.[stpo_key]
+            IHS.dbo.ODP_Detail.ODPD_Key AS odpd_key,
+            /*---Employeeee------------*/
+            Employee_Master_1.EM_RFID AS em_rfid,
+            IHS.dbo.ODP_Master.ODP_EM_Key AS odp_em_key,
+            Employee_Master_1.EM_Department AS em_department,
+            Employee_Master_1.EM_FirstName AS em_firstname,
+            Employee_Master_1.EM_LastName AS em_lastname,
+            Employee_Master_1.EM_SSN AS em_ssn,
+            Employee_Master_1.EM_City AS em_city,
+            Employee_Master_1.EM_LCD_Name AS odpd_em_lcd_name,
+
+            IHS.dbo.ODP_Master.[ODP_Actual_Clock_In] AS odp_actual_clock_in,
+            IHS.dbo.ODP_Master.[ODP_Actual_Clock_Out] AS odp_actual_clock_out,
+            IHS.dbo.ODP_Master.[ODP_Shift_Clock_In] AS odp_shift_clock_in,
+            IHS.dbo.ODP_Master.[ODP_Shift_Clock_Out] AS odp_shift_clock_out,
+            IHS.dbo.ODP_Master.[ODP_First_Hanger_Time] AS odp_first_hanger_time,
+            IHS.dbo.ODP_Master.[ODP_Last_Hanger_Time] AS odp_last_hanger_time,
+            IHS.dbo.ODP_Master.[ODP_Current_Station] AS odp_current_station,
+            IHS.dbo.ODP_Master.[ODP_Lump_Sum_Payment] AS odp_lump_sum_payment,
+            IHS.dbo.ODP_Master.[ODP_Make_Up_Pay_Rate] AS odp_make_up_pay_rate,
+            IHS.dbo.ODP_Master.[ODP_Last_Hanger_Start_Time] AS odp_last_hanger_start_time,
+            IHS.dbo.ODP_Detail.ODPD_WC_Key AS odpd_wc_key,
+            Work_Codes_1.WC_Description AS ODPI_WC_Description,
+	
+            IHS.dbo.ODP_Detail.ODPD_Workstation AS odpd_workstation,
+            IHS.dbo.ODP_Detail.ODPD_Quantity AS odpd_quantity,
+
+            IHS.dbo.ODP_Detail.ODPD_OC_Key AS odpd_oc_key,
+            Operation_Codes_1.OC_Description AS oc_description,
+            CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN IHS.dbo.ODP_Detail.ODPD_Quantity ELSE 0 END AS loading_qty,
+            CASE WHEN [OC_Description] IN ('Garment insert in Box') THEN IHS.dbo.ODP_Detail.ODPD_Quantity ELSE 0 END AS unloading_qty,
+            Colour_Master_1.CM_Short_Description AS cm_short_description,
+            Size_Master_1.SM_Short_Description AS sm_short_description,
+            IHS.dbo.ODP_Detail.ODPD_Standard AS oc_standard_time,
+            IHS.dbo.ODP_Detail.ODPD_Piece_Rate AS oc_piece_rate,
+            IHS.dbo.ODP_Detail.ODPD_Actual_Time AS odpd_actual_time,
+
+
+            Colour_Master_1.CM_Description AS cm_description,
+            Size_Master_1.SM_Description AS sm_description,
+            IHS.dbo.ODP_Detail.ODPD_PA_Key AS odpd_pa_key,
+            Pay_Categories_1.PA_CurrencyValue AS odpd_pa_currencyvalue,
+            Pay_Categories_1.PA_CategoryType AS odpd_pa_categorytype,
+            Pay_Categories_1.PA_Description AS odpd_pa_description,
+            IHS.dbo.ODP_Detail.ODPD_Is_Overtime AS odpd_is_overtime,
+            IHS.dbo.ODP_Detail.ODPD_Start_Time AS odpd_start_time,
+
+            Style_Master_1.ST_ID AS st_id,
+            Style_Master_1.ST_Description AS st_description,
+            IHS.dbo.ODP_Detail.ODPD_Lot_Number AS odpd_lot_number,
+			
+            Primary_Codes_1.PC_Description AS odpd_pc_description,
+            Style_Master_1.ST_Collection AS odpd_st_collection,
+            IHS.dbo.ODP_Detail.ODPD_ST_Key AS odpd_st_key,
+            Machine_Codes_1.MC_Type AS odpd_mc_type,
+            Style_Operations_1.STOP_Order AS odpd_stop_order,
+            Style_Operations_1.STOP_Number AS odpd_stop_number,
+            Operation_Codes_1.OC_Piece_Rate_Additional AS odpd_oc_piece_rate_additional,
+
+
+            Style_Master_1.ST_Fabric AS odpd_st_fabric,
+            IHS.dbo.ODP_Detail.ODPD_STPO_Key AS odpd_stpo_key,
+            Style_Planned_Orders_1.STPO_ID AS ODPI_STPO_Number,
+            Style_Master_1.ST_Trim AS odpd_st_trim,
+            IHS.dbo.ODP_Detail.ODPD_Normal_Pay_Factor AS odpd_normal_pay_factor,
+            IHS.dbo.ODP_Detail.ODPD_Overtime_Factor AS odpd_overtime_factor,
+            li.Line_Number AS odpd_line_number,
+            IHS.dbo.ODP_Detail.[created_at] AS created_at
+        FROM
+            lnk_svr.IHS_SHARED.dbo.Style_Operations_Master AS Style_Operations_Master_1
+            INNER JOIN lnk_svr.IHS_SHARED.dbo.Style_Operations AS Style_Operations_1 ON Style_Operations_Master_1.STOPM_Key = Style_Operations_1.STOP_STOPM_Key
+            INNER JOIN lnk_svr.IHS_SHARED.dbo.Style_Master AS Style_Master_1 ON Style_Operations_Master_1.STOPM_Key = Style_Master_1.ST_STOPM_Key
+            RIGHT OUTER JOIN IHS.dbo.ODP_Master
+            INNER JOIN IHS.dbo.ODP_Detail ON IHS.dbo.ODP_Master.ODP_Key = IHS.dbo.ODP_Detail.ODPD_ODP_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Style_Planned_Orders AS Style_Planned_Orders_1 ON IHS.dbo.ODP_Detail.ODPD_STPO_Key = Style_Planned_Orders_1.STPO_Key ON Style_Master_1.ST_Key = IHS.dbo.ODP_Detail.ODPD_ST_Key
+            AND Style_Operations_1.STOP_OC_Key = IHS.dbo.ODP_Detail.ODPD_OC_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Work_Codes AS Work_Codes_1 ON IHS.dbo.ODP_Detail.ODPD_WC_Key = Work_Codes_1.WC_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Primary_Codes AS Primary_Codes_1
+            INNER JOIN lnk_svr.IHS_SHARED.dbo.Operation_Codes AS Operation_Codes_1 ON Primary_Codes_1.PC_Key = Operation_Codes_1.OC_PC_Key ON IHS.dbo.ODP_Detail.ODPD_OC_Key = Operation_Codes_1.OC_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Employee_Master AS Employee_Master_1 ON IHS.dbo.ODP_Master.ODP_EM_Key = Employee_Master_1.EM_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Pay_Categories AS Pay_Categories_1 ON IHS.dbo.ODP_Detail.ODPD_PA_Key = Pay_Categories_1.PA_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Machine_Codes AS Machine_Codes_1 ON Primary_Codes_1.PC_MC_Key = Machine_Codes_1.MC_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Size_Master AS Size_Master_1 ON IHS.dbo.ODP_Detail.ODPD_SM_Key = Size_Master_1.SM_Key
+            LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Colour_Master AS Colour_Master_1 ON IHS.dbo.ODP_Detail.ODPD_CM_Key = Colour_Master_1.CM_Key
+            LEFT OUTER JOIN (SELECT TOP (1) Line_Number FROM IHS.dbo.Line_Information ORDER BY Date_Of_Configuration DESC) AS li ON 1 = 1
         WHERE ODP_Last_Hanger_Time > ?
         ORDER BY ODP_Last_Hanger_Time ASC;
     """

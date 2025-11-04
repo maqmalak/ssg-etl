@@ -1,5 +1,6 @@
 venv
 logs/*
+debug/*
 dags_test/*
 !logs/.gitignore
 dags/_pycache_/*

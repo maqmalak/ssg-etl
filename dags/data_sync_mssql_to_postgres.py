@@ -34,10 +34,11 @@ logger.setLevel(logging.INFO)
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "start_date": datetime(2025, 11, 3, 19, 38, tzinfo=PKT),
+    # "start_date": datetime(2025, 11, 5, 17, 0, tzinfo=PKT),
+    "start_date":datetime.now(PKT) - timedelta(minutes=30),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
-    "execution_timeout": timedelta(hours=6),
+    "execution_timeout": timedelta(hours=1),
     "catchup": False,
 }
 

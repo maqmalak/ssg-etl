@@ -251,15 +251,15 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             EM_Master_Rework.EM_LCD_Name AS qcr_repair_em_lcd_name,
 
             CASE 
-                WHEN Style_Master_1.ST_Line=1 THEN 'line-21'
-                WHEN Style_Master_1.ST_Line=2 THEN 'line-22'
-                WHEN Style_Master_1.ST_Line=3 THEN 'line-23'
-                WHEN Style_Master_1.ST_Line=4 THEN 'line-24'
-                WHEN Style_Master_1.ST_Line=5 THEN 'line-25'
-                WHEN Style_Master_1.ST_Line=6 THEN 'line-26'
+                WHEN Style_Master_1.ST_Line=1 THEN 'line-26'
+                WHEN Style_Master_1.ST_Line=2 THEN 'line-25'
+                WHEN Style_Master_1.ST_Line=3 THEN 'line-24'
+                WHEN Style_Master_1.ST_Line=4 THEN 'line-23'
+                WHEN Style_Master_1.ST_Line=5 THEN 'line-22'
+                WHEN Style_Master_1.ST_Line=6 THEN 'line-28'
                 WHEN Style_Master_1.ST_Line=7 THEN 'line-27'
-                WHEN Style_Master_1.ST_Line=8 THEN 'line-28'
-                WHEN Style_Master_1.ST_Line=9 THEN 'line-29'
+                WHEN Style_Master_1.ST_Line=8 THEN 'line-29'
+                WHEN Style_Master_1.ST_Line=9 THEN 'line-21'
             else 'unknown' END AS source_line,    
             QC_Rework_1.QCR_STPO_Key AS qcr_stpo_key
 

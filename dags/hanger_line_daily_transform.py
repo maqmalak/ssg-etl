@@ -40,10 +40,10 @@ logger.setLevel(logging.INFO)
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
-    'start_date': datetime(2025, 8, 22, tzinfo=PKT),
+    'start_date': datetime(2025, 11, 20, tzinfo=PKT),
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
-    'execution_timeout': timedelta(hours=2),
+    'execution_timeout': timedelta(hours=1),
 }
 
 def check_for_data(**context):

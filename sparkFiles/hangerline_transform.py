@@ -212,7 +212,7 @@ def transform_data(spark):
             # Filter the data to only include records from the last day
             # We'll do this after loading to avoid SQL dialect issues
             from pyspark.sql.functions import current_date, date_sub
-            df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
+            df = df.filter(df["odp_date"] >= date_sub(current_date(), 1))
             
             print(f"Data filtered successfully. Row count: {df.count()}")
         except Exception as e:
@@ -230,7 +230,7 @@ def transform_data(spark):
                 
                 # Filter the data to only include records from the last day
                 from pyspark.sql.functions import current_date, date_sub
-                df = df.filter(df["ODP_Date"] >= date_sub(current_date(), 1))
+                df = df.filter(df["odp_date"] >= date_sub(current_date(), 1))
                 
                 print(f"Data loaded and filtered successfully without explicit driver. Row count: {df.count()}")
             except Exception as retry_e:
@@ -249,29 +249,29 @@ def transform_data(spark):
             print("Warning: No data found in operator_daily_performance table for the last day")
             return True
             
-        # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
+        # Transform 1: Group by odp_date and OC_Description, sum ODPD_Quantity
         print("Performing aggregation 1...")
         try:
-            aggregated_df1 = df.groupBy("ODP_Date", "OC_Description", "source_connection") \
-                .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
+            aggregated_df1 = df.groupBy("odp_date", "oc_description", "source_connection") \
+                .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
         except Exception as e:
             print(f"Error in aggregation 1: {str(e)}")
             return False
         
-        # Transform 2: Group by ODP_Date and Shift, sum ODPD_Quantity
+        # Transform 2: Group by odp_date and Shift, sum ODPD_Quantity
         print("Performing aggregation 2...")
         try:
-            aggregated_df2 = df.groupBy("ODP_Date", "Shift", "source_connection") \
-                .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
+            aggregated_df2 = df.groupBy("odp_date", "shift", "source_connection") \
+                .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
         except Exception as e:
             print(f"Error in aggregation 2: {str(e)}")
             return False
   
-        # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
+        # Transform 3: Group by odp_date and Employee, sum ODPD_Quantity
         print("Performing aggregation 3...")
         try:
-            aggregated_df3 = df.groupBy("ODP_Date", "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName", "source_connection") \
-                .agg(spark_sum("ODPD_Quantity").alias("ODPD_Quantity"))
+            aggregated_df3 = df.groupBy("odp_date", "odp_em_key", "em_firstname" "source_connection") \
+                .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
         except Exception as e:
             print(f"Error in aggregation 3: {str(e)}")
             return False

@@ -44,7 +44,7 @@ default_args = {
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["StyleBasicInformation","INAEmployees","LoadingInformation","OperationBreakDownInfo"]
+INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp"]
 
 
 # INCLUDED_TABLES = ["Coa31", "Employees", "DefDepartments", "OperationBreakDown", "OperationBreakDown_Det"]

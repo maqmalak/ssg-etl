@@ -1,0 +1,362 @@
+"""
+ETL DAG: MSSQL Employee Shift Update for All Lines with Multiple Targets using TaskGroup
+------------------------------------------------------------------
+✅ Fetches employee data for all employees on all lines from MSSQL source
+✅ Groups employees by line and processes updates using TaskGroup
+✅ Updates shift information in appropriate MSSQL target based on Line_Desc
+✅ Implements proper error handling and retry logic
+✅ Logs progress and provides summary
+"""
+
+from __future__ import annotations
+import sys, os, logging, time, random, re
+from datetime import datetime, timedelta
+import pandas as pd
+import pendulum, pyodbc
+from airflow.decorators import dag, task
+from airflow.exceptions import AirflowSkipException
+from airflow.hooks.base import BaseHook
+from airflow.operators.empty import EmptyOperator
+from airflow.utils.trigger_rule import TriggerRule
+from airflow.utils.task_group import TaskGroup
+from sqlalchemy import create_engine, text
+from functools import wraps
+
+# ---------------------------------------------------------------- #
+# CONFIGURATION
+# ---------------------------------------------------------------- #
+PKT = pendulum.timezone("Asia/Karachi")
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+default_args = {
+    "owner": "airflow",
+    "depends_on_past": False,
+    # "start_date": datetime(2025, 11, 5, 17, 0, tzinfo=PKT),
+    "start_date":datetime.now(PKT) - timedelta(minutes=30),
+    "retries": 1,
+    "retry_delay": timedelta(minutes=5),
+    "execution_timeout": timedelta(hours=1),
+    "catchup": False,
+}
+
+MSSQL_Source = "SilverStr"
+# Define list of MSSQL target connection IDs
+MSSQL_TARGETS = [
+    'line-21',
+    'line-25', 
+    # 'line-23',
+    # 'line-24',
+    # Add more line targets as needed
+]
+
+# ---------------------------------------------------------------- #
+# RETRY DECORATOR (for MSSQL & PostgreSQL checks)
+# ---------------------------------------------------------------- #
+def retry_on_exception(max_retries=2, delay=3, backoff=1.5, label=None):
+    """Retry function with exponential backoff and jitter"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            wait = delay
+            context = label or func.__name__
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    if retries >= max_retries:
+                        logger.error(f"❌ {context} failed after {max_retries} retries: {e}")
+                        raise
+                    logger.warning(f"⚠️ {context} retry {retries}/{max_retries} in {wait:.1f}s ({e})")
+                    time.sleep(wait + random.uniform(0, 1))
+                    wait *= backoff
+        return wrapper
+    return decorator
+
+
+# ---------------------------------------------------------------- #
+# DB UTILITIES
+# ---------------------------------------------------------------- #
+def build_mssql_conn_str(conn):
+    return (
+        f"DRIVER={{FreeTDS}};SERVER={conn.host};PORT=1433;"
+        f"DATABASE={conn.schema};UID={conn.login};PWD={conn.password};"
+        "TDS_Version=7.0;Connect Timeout=60;Login Timeout=60;"
+    )
+
+
+# ---------------------------------------------------------------- #
+# DAG DEFINITION
+# ---------------------------------------------------------------- #
+@dag(
+    dag_id="update_all_lines_employees_taskgroup",
+    default_args=default_args,
+    schedule="*/30 8-23,0-1 * * 1-6",  # Every 30 min Mon–Sat, 8AM–2AM PKT
+    tags=["mssqlerp", "hangerline", "ssg", "employee", "multiple-lines", "taskgroup", "multiple-targets"],
+    max_active_runs=1,
+)
+def update_all_lines_employees():
+    # ---------------- SOURCE CHECK ---------------- #
+    @task
+    @retry_on_exception(label="MSSQL Source Check")
+    def source_check(conn_id: str = MSSQL_Source):
+        conn = BaseHook.get_connection(conn_id)
+        conn_str = build_mssql_conn_str(conn)
+        with pyodbc.connect(conn_str, timeout=30) as c:
+            c.cursor().execute("SELECT 1")
+        msg = f"✅ MSSQL Source ({conn_id}) reachable"
+        logger.info(msg)
+        return msg
+
+    # ---------------- TARGET CHECK ---------------- #
+    @task
+    @retry_on_exception(label="MSSQL Target Check")
+    def target_check(conn_id: str):
+        conn = BaseHook.get_connection(conn_id)
+        conn_str = build_mssql_conn_str(conn)
+        with pyodbc.connect(conn_str, timeout=30) as c:
+            c.cursor().execute("SELECT 1")
+        msg = f"✅ MSSQL Target ({conn_id}) reachable"
+        logger.info(msg)
+        return msg
+
+    # ---------------- FETCH LINE EMPLOYEES DATA ---------------- #
+    @task
+    @retry_on_exception()
+    def fetch_line_employees(source_conn_id: str, line_desc: str):
+        """
+        Fetch employee data from MSSQL source for a specific line
+
+        Args:
+            source_conn_id (str): The MSSQL source connection ID
+            line_desc (str): The line description to filter employees
+
+        Returns:
+            list: List of employee records as dictionaries
+        """
+        logger.info(f"[{source_conn_id}] 🚀 Starting data extraction for line {line_desc}...")
+        start_time = time.time()
+
+        try:
+            # Get MSSQL connection
+            connection = BaseHook.get_connection(source_conn_id)
+            conn_str = build_mssql_conn_str(connection)
+
+            # SQL Query for employees on specific line
+            query = """
+                SELECT
+                    e.ID,
+                    e.INA_ID,
+                    e.Title,
+                    e.Desig_ID,
+                    e.Deptt_ID,
+                    e.Current_Line_ID,
+                    e.Latest_Line_ID,
+                    e.Assignment_Date,
+                    Line_Desc,
+                    Shift,
+                    case when Shift = 'Day' then 1 else 2 end as Shift_ID,
+                    e.Joindate,
+                    ActiveStatus
+                FROM
+                    hangerline_emp AS e
+                WHERE Line_Desc = ?
+                """
+
+            with pyodbc.connect(conn_str, timeout=30) as c:
+                cur = c.cursor()
+                cur.execute(query, (line_desc,))
+                # Fetch all results
+                rows = cur.fetchall()
+                # Get column names
+                columns = [column[0] for column in cur.description]
+                # Convert to list of dictionaries for easier processing
+                data = [dict(zip(columns, row)) for row in rows]
+
+                total = len(data)  # Calculate total rows
+                logger.info(f"[{source_conn_id}] 🎯 Extraction complete for {line_desc} → {total} rows in {time.time() - start_time:.2f}s")
+
+            return data
+        except Exception as e:
+            logger.error(f"❌ Error fetching {line_desc} employee data from source {source_conn_id}: {str(e)}", exc_info=True)
+            raise
+
+    # Function to update employee shift (without task decorator for use inside other tasks)
+    @retry_on_exception(label="Update Employee Shift")
+    def update_employee_shift_direct(emp_id: int, shift_id: int, target_connection_id: str):
+        """
+        Update an employee's shift in the appropriate target database
+
+        Args:
+            emp_id (int): Employee ID to update
+            shift_id (int): New shift ID to assign
+            target_connection_id (str): Target connection ID to update
+
+        Returns:
+            int: Number of rows affected by the update
+        """
+        logger.info(f"[{target_connection_id}] 🚀 Updating employee {emp_id} with shift {shift_id}...")
+        start_time = time.time()
+
+        try:
+            # Get MSSQL connection for the specific target
+            connection = BaseHook.get_connection(target_connection_id)
+            conn_str = build_mssql_conn_str(connection)
+
+            # SQL Query with proper parameterization
+            query = "UPDATE ODP_Master SET Shift_id = ? WHERE ODP_Date = ? AND ODP_EM_Key = ?"
+            # Calculate yesterday's date for 'last day'
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            update_date = yesterday  # Use yesterday (last day) or pass as parameter
+
+            with pyodbc.connect(conn_str, timeout=30) as c:
+                cur = c.cursor()
+                cur.execute(query, (shift_id, update_date, emp_id))
+                c.commit()  # Commit the changes
+
+                # Get number of affected rows
+                rows_affected = cur.rowcount
+                logger.info(f"[{target_connection_id}] 🎯 Update complete → {rows_affected} rows in {time.time() - start_time:.2f}s")
+
+            return rows_affected
+        except Exception as e:
+            logger.error(f"❌ Error updating employee {emp_id} in {target_connection_id}: {str(e)}", exc_info=True)
+            raise
+
+    # Task version of the update function
+    @task
+    def execute_upserts(emp_updates: list, target_connection_id: str):
+        """
+        Execute upsert operations for employees in a specific line
+
+        Args:
+            emp_updates (list): List of employee updates to perform
+            target_connection_id (str): Target connection ID to update
+
+        Returns:
+            dict: Summary of operations
+        """
+        logger.info(f"🔧 Executing {len(emp_updates)} upserts for target {target_connection_id}...")
+
+        successful_updates = 0
+        failed_updates = 0
+
+        for i, update_info in enumerate(emp_updates):
+            try:
+                emp_id = update_info.get('emp_id')
+                shift_id = update_info.get('shift_id')
+
+                if not emp_id or shift_id is None:
+                    logger.warning(f"⚠️ Skipping update {i+1} - invalid data: {update_info}")
+                    failed_updates += 1
+                    continue
+
+                # Call the direct update function for each employee
+                rows_affected = update_employee_shift_direct(emp_id, shift_id, target_connection_id)
+
+                if rows_affected > 0:
+                    successful_updates += 1
+                    logger.info(f"✅ Successfully updated employee {emp_id} with shift {shift_id} in {target_connection_id} - {rows_affected} rows affected")
+                else:
+                    logger.warning(f"⚠️ No rows affected for employee {emp_id} in {target_connection_id}")
+                    failed_updates += 1
+            except Exception as e:
+                logger.error(f"❌ Failed to update employee {update_info.get('emp_id', 'unknown')}: {str(e)}", exc_info=True)
+                failed_updates += 1
+
+        summary = {
+            'successful_updates': successful_updates,
+            'failed_updates': failed_updates,
+            'total_processed': len(emp_updates),
+            'target': target_connection_id
+        }
+
+        logger.info(f"✅ {target_connection_id} upsert summary: {summary}")
+        return summary
+
+    # ---------------- PREPARE UPDATES ---------------- #
+    @task
+    def prepare_updates(employees_data: list):
+        """
+        Prepare updates from employee data
+
+        Args:
+            employees_data (list): List of employee records as dictionaries
+
+        Returns:
+            list: List of updates to perform
+        """
+        logger.info(f"🔧 Preparing updates for {len(employees_data)} employees...")
+
+        updates_to_perform = []
+        invalid_records = 0
+
+        for i, emp in enumerate(employees_data):
+            try:
+                emp_id = emp.get('INA_ID')  # Using INA_ID as the key for ODP_EM_Key
+                shift_id = emp.get('Shift_ID')
+
+                # Validate required fields
+                if emp_id is not None and shift_id is not None:
+                    updates_to_perform.append({
+                        'emp_id': int(emp_id),
+                        'shift_id': int(shift_id)
+                    })
+                else:
+                    logger.warning(f"⚠️ Invalid record at index {i}: Missing emp_id or shift_id - {emp}")
+                    invalid_records += 1
+            except (ValueError, TypeError) as e:
+                logger.warning(f"⚠️ Invalid data type at index {i}: {emp} - Error: {str(e)}")
+                invalid_records += 1
+
+        logger.info(f"✅ Prepared {len(updates_to_perform)} valid updates, skipped {invalid_records} records")
+        return updates_to_perform
+
+    @task(trigger_rule=TriggerRule.ALL_DONE)
+    def finalize_all():
+        return "done"
+
+    def _safe_conn_id(s: str) -> str:
+        return re.sub(r'[^A-Za-z0-9_]', '_', s)
+
+    start = EmptyOperator(task_id="start")
+    end = EmptyOperator(task_id="end")
+
+    leaf_tasks = []
+    for conn_id in MSSQL_TARGETS:
+        # Extract the line name from the connection ID (e.g., 'line-21' -> 'line-21')
+        line_name = conn_id  # Assuming the connection ID is the line name
+        
+        safe = _safe_conn_id(conn_id)
+        with TaskGroup(group_id=f"line_{safe}", tooltip=f"ETL for {conn_id}") as tg:
+            # source check (shared source, no args)
+            src = source_check.override(task_id=f"source_{safe}")()
+            # target check (per-target)
+            tgt = target_check.override(task_id=f"target_{safe}")(conn_id)
+            # data extraction: fetch_line_employees(source_conn_id, connection_id)
+            data_check = fetch_line_employees.override(task_id=f"data_check_{safe}")(MSSQL_Source, conn_id)
+            # prepare payloads
+            prep = prepare_updates.override(task_id=f"prepare_{safe}")(data_check)
+            # upsert into target
+            ups = execute_upserts.override(task_id=f"upsert_{safe}")(prep, conn_id)
+
+            # wiring inside group
+            src >> tgt >> data_check >> prep >> ups
+
+            # ensure DAG-level ordering
+            start >> src
+            leaf_tasks.append(ups)
+
+    # connect all leaf tasks to end
+    for t in leaf_tasks:
+        t >> end
+
+    # optional finalizer task to make downstream joins explicit
+    final = finalize_all()
+    for t in leaf_tasks:
+        t >> final
+    final >> end
+
+dag = update_all_lines_employees()

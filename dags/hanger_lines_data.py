@@ -198,8 +198,8 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             # IHS.dbo.ODP_Master.ODP_Date AS odp_date,
 
             DATEADD(DAY, 
-            - CASE WHEN DATEPART(HOUR, CAST(IHS.dbo.ODP_Actual_Clock_In AS DATETIMEOFFSET)) < 5 THEN 1 ELSE 0 END,
-            CAST(CAST(ODP_Actual_Clock_In AS DATETIMEOFFSET) AS DATE)
+            - CASE WHEN DATEPART(HOUR, CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS DATETIMEOFFSET)) < 5 THEN 1 ELSE 0 END,
+            CAST(CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS DATETIMEOFFSET) AS DATE)
            ) AS odp_date,
 
             IHS.dbo.ODP_Master.ODP_Key AS odp_key,

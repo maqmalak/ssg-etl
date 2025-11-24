@@ -195,13 +195,19 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     # SQL Query (fully aligned)
     query = """
         SELECT
-            IHS.dbo.ODP_Master.ODP_Date AS odp_date,
+            # IHS.dbo.ODP_Master.ODP_Date AS odp_date,
+
+            DATEADD(DAY, 
+            - CASE WHEN DATEPART(HOUR, CAST(IHS.dbo.ODP_Actual_Clock_In AS DATETIMEOFFSET)) < 5 THEN 1 ELSE 0 END,
+            CAST(CAST(ODP_Actual_Clock_In AS DATETIMEOFFSET) AS DATE)
+           ) AS odp_date,
+
             IHS.dbo.ODP_Master.ODP_Key AS odp_key,
             /*IHS.dbo.ODP_Master.ODP_Shift AS odp_shift_key,*/
             /*# CASE WHEN [ODP_Shift] = 1 THEN 'Day' ELSE 'Night' END AS shift,*/
 
             CASE 
-                WHEN CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS TIME) BETWEEN '08:00:00' AND '17:00:00' 
+                WHEN CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS TIME) BETWEEN '07:00:00' AND '16:00:00' 
                 THEN 'Day' 
                 ELSE 'Night' 
             END as shift,

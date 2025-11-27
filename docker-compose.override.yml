@@ -53,11 +53,11 @@ services:
       retries: 5
       start_period: 5s
     restart: always
-#  postgres:
-#    build:
-#      context: .
-#      dockerfile: postgres/Dockerfile
-#    command: ["postgres", "-c", "config_file=/usr/share/postgresql/14/postgresql.conf"]
+  # postgres:
+  #  build:
+  #    context: .
+  #    dockerfile: postgres/Dockerfile
+  #  command: ["postgres", "-c", "config_file=/usr/share/postgresql/14/postgresql.conf"]
 
 volumes:
   pg-grafan-db-volume:

@@ -4,7 +4,7 @@
 #
 # Variable: AIRFLOW__CORE__DAGS_FOLDER
 #
-dags_folder = /home/maqmalak/airflow/dags
+dags_folder = /home/maqmalak/ETL/ssg-etl/dags
 
 # Hostname by providing a path to a callable, which will resolve the hostname.
 # The format is "package.function".
@@ -153,7 +153,7 @@ load_examples = True
 #
 # Variable: AIRFLOW__CORE__PLUGINS_FOLDER
 #
-plugins_folder = /home/maqmalak/airflow/plugins
+plugins_folder = /home/maqmalak/ETL/ssg-etl/plugins
 
 # Should tasks be executed via forking of the parent process
 # 
@@ -169,7 +169,7 @@ execute_tasks_new_python_interpreter = False
 #
 # Variable: AIRFLOW__CORE__FERNET_KEY
 #
-fernet_key = JKRy6cl7x2jldFEeG3wG5vBFGNcUCi-jZsH2jOnQN-A=
+fernet_key = Z1-3P7kCNpmPhnQH9FarTjOTpd_IrDuSrIuJ9lKhNHY=
 
 # Whether to disable pickling dags
 #
@@ -445,7 +445,7 @@ database_access_isolation = False
 #
 # Variable: AIRFLOW__CORE__INTERNAL_API_SECRET_KEY
 #
-internal_api_secret_key = THBYkz+OYq120XWDyICmvQ==
+internal_api_secret_key = L0IcWWlD8Ik+NiQzsZVDZA==
 
 # The ability to allow testing connections across Airflow UI, API and CLI.
 # Supported options: ``Disabled``, ``Enabled``, ``Hidden``. Default: Disabled
@@ -494,7 +494,7 @@ alembic_ini_file_path = alembic.ini
 #
 # Variable: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
 #
-sql_alchemy_conn = sqlite:////home/maqmalak/airflow/airflow.db
+sql_alchemy_conn = sqlite:////home/maqmalak/ETL/ssg-etl/airflow.db
 
 # Extra engine specific keyword args passed to SQLAlchemy's create_engine, as a JSON-encoded value
 #
@@ -645,7 +645,7 @@ migration_batch_size = 10000
 #
 # Variable: AIRFLOW__LOGGING__BASE_LOG_FOLDER
 #
-base_log_folder = /home/maqmalak/airflow/logs
+base_log_folder = /home/maqmalak/ETL/ssg-etl/logs
 
 # Airflow can store logs remotely in AWS S3, Google Cloud Storage or Elastic Search.
 # Set this to ``True`` if you want to enable remote logging.
@@ -787,7 +787,7 @@ dag_processor_log_format = [%%(asctime)s] [SOURCE:DAG_PROCESSOR] {%%(filename)s:
 #
 # Variable: AIRFLOW__LOGGING__DAG_PROCESSOR_CHILD_PROCESS_LOG_DIRECTORY
 #
-dag_processor_child_process_log_directory = /home/maqmalak/airflow/logs/dag_processor
+dag_processor_child_process_log_directory = /home/maqmalak/ETL/ssg-etl/logs/dag_processor
 
 # Determines the formatter class used by Airflow for structuring its log messages
 # The default formatter class is timezone-aware, which means that timestamps attached to log entries
@@ -1193,7 +1193,7 @@ enable_swagger_ui = True
 #
 # Variable: AIRFLOW__API__SECRET_KEY
 #
-secret_key = THBYkz+OYq120XWDyICmvQ==
+secret_key = L0IcWWlD8Ik+NiQzsZVDZA==
 
 # Expose the configuration file in the web server. Set to ``non-sensitive-only`` to show all values
 # except those that have security implications. ``True`` shows all values. ``False`` hides the
@@ -1421,7 +1421,7 @@ jwt_cli_expiration_time = 3600
 #
 # Variable: AIRFLOW__API_AUTH__JWT_SECRET
 #
-jwt_secret = waXmWbjBtQgS+D3yNbd5qQ==
+jwt_secret = CzmUkWeJodbSZNDzCWMmdg==
 
 # The path to a file containing a PEM-encoded private key use when generating Task Identity tokens in
 # the executor.

@@ -62,7 +62,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
 
 # ---------------- DAG DEFINITION ---------------- #
 @dag(
-    dag_id="hanger_lines_data_27-28_29",
+    dag_id="hanger_lines_data_27_28_29",
     default_args=default_args,
     schedule="6,16,26,36,46,56 8-23,0-1 * * 1-6",  # ✅ Every 10 min, 8AM–2AM, Mon–Sat
     tags=["ssg", "hangerline", "data", "upsert"],

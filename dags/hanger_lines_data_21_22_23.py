@@ -1,5 +1,5 @@
 """
-Airflow DAG: hanger_lines_data_upsert
+Airflow DAG: hanger_lines_data_upsert li
 -------------------------------------
 ETL pipeline for Hanger Lines Data (MSSQL → PostgreSQL Upsert)
 
@@ -41,7 +41,8 @@ logger.setLevel(logging.INFO)
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "start_date": datetime(2025, 10, 30, 0, 0, tzinfo=PKT),
+    # "start_date": datetime(2025, 10, 30, 0, 0, tzinfo=PKT),
+    "start_date":datetime.now(PKT) - timedelta(minutes=10),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(hours=4),
@@ -62,7 +63,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
 
 # ---------------- DAG DEFINITION ---------------- #
 @dag(
-    dag_id="hanger_lines_data_21_22-23",
+    dag_id="hanger_lines_data_21_22_23",
     default_args=default_args,
     schedule="2,12,22,32,42,52 8-23,0-1 * * 1-6",  # ✅ Every 10 min, 8AM–2AM, Mon–Sat
     tags=["ssg", "hangerline", "data", "upsert"],

@@ -201,7 +201,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                 ELSE DATEADD(DAY, -1, CONVERT(DATE, QC_Rework_1.QCR_Defect_DateTime))
             END AS qcr_date,
             CASE 
-                WHEN CAST(QC_Rework_1.QCR_Defect_DateTime AS TIME) BETWEEN '08:00:00' AND '17:00:00' 
+                WHEN CAST(QC_Rework_1.QCR_Defect_DateTime AS TIME) BETWEEN '07:00:00' AND '16:00:00' 
                 THEN 'Day' 
                 ELSE 'Night' 
             END as shift,

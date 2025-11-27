@@ -195,11 +195,11 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     # SQL Query (fully aligned)
     query = """
         SELECT
-            # IHS.dbo.ODP_Master.ODP_Date AS odp_date,
+            /*# IHS.dbo.ODP_Master.ODP_Date AS odp_date,*/
 
             DATEADD(DAY, 
-            - CASE WHEN DATEPART(HOUR, CAST(IHS.dbo.ODP_Actual_Clock_In AS DATETIMEOFFSET)) < 5 THEN 1 ELSE 0 END,
-            CAST(CAST(ODP_Actual_Clock_In AS DATETIMEOFFSET) AS DATE)
+            - CASE WHEN DATEPART(HOUR, CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS DATETIMEOFFSET)) < 5 THEN 1 ELSE 0 END,
+            CAST(CAST(IHS.dbo.ODP_Master.ODP_Actual_Clock_In AS DATETIMEOFFSET) AS DATE)
            ) AS odp_date,
 
             IHS.dbo.ODP_Master.ODP_Key AS odp_key,
@@ -297,7 +297,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Size_Master AS Size_Master_1 ON IHS.dbo.ODP_Detail.ODPD_SM_Key = Size_Master_1.SM_Key
             LEFT OUTER JOIN lnk_svr.IHS_SHARED.dbo.Colour_Master AS Colour_Master_1 ON IHS.dbo.ODP_Detail.ODPD_CM_Key = Colour_Master_1.CM_Key
             LEFT OUTER JOIN (SELECT TOP (1) Line_Number FROM IHS.dbo.Line_Information ORDER BY Date_Of_Configuration DESC) AS li ON 1 = 1
-        WHERE IHS.dbo.Master.modified_at > ?
+        WHERE IHS.dbo.ODP_Master.modified_at > ?
         ORDER BY ODP_Last_Hanger_Time ASC;
     """
 #  WHERE ODP_Last_Hanger_Time > ?

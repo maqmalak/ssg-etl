@@ -205,32 +205,31 @@ def data_sync_mssql_to_postgres():
         target_table = table_name.lower()  # ✅ lowercase table name
 
         # Check if the table exists in the dbo schema before proceeding
-        with pyodbc.connect(conn_str, timeout=30) as c:
-            
-            cur = c.cursor()
-            check_query = f"""
-                SELECT COUNT(*) 
-                FROM {table_name} ;
-             """
-            logger.info(f"Checking existence: {check_query} ")
-            cur.execute(check_query)
-            table_exists = cur.fetchone()[0] > 0
-            
-            if not table_exists:
-                # Let's also try a more comprehensive check to see what might be the issue
-                existence_debug_query = f"""
-                    SELECT TABLE_SCHEMA, TABLE_NAME 
-                    FROM INFORMATION_SCHEMA.VIEWS 
-                    WHERE TABLE_NAME = ?
-                """
-                cur.execute(existence_debug_query, table_name)
-                all_matches = cur.fetchall()
-                logger.info(f"All matches for {table_name} (regardless of schema): {all_matches}")
-                
+        try:
+            with pyodbc.connect(conn_str, timeout=30) as c:
+                cur = c.cursor()
+                check_query = f"""
+                    SELECT COUNT(*)
+                    FROM dbo.{table_name} ;
+                 """
+                logger.info(f"Checking existence: {check_query} ")
+                cur.execute(check_query)
+                table_exists = cur.fetchone()[0] > 0
+
+                if not table_exists:
+                    logger.info(f"⚠️ Table/view {table_name} has no data in dbo schema, skipping")
+                    msg = f"⚠️ {table_name}: skipped (no data in dbo schema)"
+                    ti.xcom_push(key=f"{target_table}_load", value=msg)
+                    return msg
+        except pyodbc.ProgrammingError as e:
+            if 'Invalid object name' in str(e):
                 logger.info(f"⚠️ Table/view {table_name} does not exist in dbo schema, skipping")
                 msg = f"⚠️ {table_name}: skipped (not found in dbo schema)"
-                ti.xcom_push(key=f"{target_table}_load", value=msg)
-                return msg
+            else:
+                logger.error(f"❌ Database error checking {table_name}: {e}")
+                msg = f"❌ {table_name}: failed (database error)"
+            ti.xcom_push(key=f"{target_table}_load", value=msg)
+            return msg
 
         logger.info(f"🚀 Starting full replace for table: {target_table}")
         with pyodbc.connect(conn_str) as mssql_conn:
@@ -292,9 +291,9 @@ def data_sync_mssql_to_postgres():
             # try to pull XCom using the prefixed (TaskGroup) task id
             result = ti.xcom_pull(key=xcom_key, task_ids=expected_task_id)
 
-            # fallback: try without prefix (in case tasks were created outside TG)
+            # fallback: try without task_ids to search globally
             if result is None:
-                result = ti.xcom_pull(key=xcom_key, task_ids=f"load_{tbl}")
+                result = ti.xcom_pull(key=xcom_key)
 
             # Interpret result
             if not result:

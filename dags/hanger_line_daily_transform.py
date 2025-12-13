@@ -229,7 +229,8 @@ dag = DAG(
     'hanger_line_daily_transform',
     default_args=default_args,
     description='Daily transformation of hanger line data',
-    schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
+    # schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
+    schedule="*/10 8-23,0-1 * * 1-6",  # ✅ Every 7 min, 8AM–2AM, Mon–Sat
     catchup=False,
     tags=['ssg', 'hanger_line', 'transformation'],
     max_active_runs=1

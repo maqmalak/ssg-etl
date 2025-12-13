@@ -11,11 +11,11 @@ SOURCE_HANGER_LANE=[
     'line-22',
     'line-23',
     'line-24',
-    'line-25',
-    'line-26',
-    'line-27',
-    'line-28',
-    'line-29',
+    # 'line-25',
+    # 'line-26',
+    # 'line-27',
+    # 'line-28',
+    # 'line-29',
 ]
 
 TARGET_HANGER_LANE=[

@@ -15,7 +15,7 @@ from airflow.exceptions import AirflowSkipException
 from pendulum import timezone
 from sqlalchemy import text
 
-from scripts.constans.db_sources import SOURCE_HANGER_LANE
+from scripts.constans.db_sources import SOURCE_HANGER_LANE_25_TO_29
 from dags.hanger_lines_qcr import (
     build_mssql_conn_str,
     get_postgres_engine,
@@ -57,10 +57,10 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
     }
 
 @dag(
-    dag_id="hanger_lines_data_qcr",
+    dag_id="hanger_lines_data_qcr2",
     default_args=default_args,
     # schedule=timedelta(minutes=5),
-    schedule="*/8 8-23,0-1 * * 1-6",  # ✅ Every 5 min, 8AM–2AM, Mon–Sat
+    schedule="*/7 8-23,0-1 * * 1-6",  # ✅ Every 7 min, 8AM–2AM, Mon–Sat
     tags=["ssg", "hangerline", "data", "qcr"],
     max_active_runs=1,
     description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL",
@@ -206,7 +206,7 @@ def hanger_lines_data_qcr():
         return summary
 
     # ---------------- DYNAMIC BUILD with GROUPS ---------------- #
-    for conn_id in SOURCE_HANGER_LANE:
+    for conn_id in SOURCE_HANGER_LANE_25_TO_29:
         with TaskGroup(group_id=f"line_{conn_id}", tooltip=f"Pipeline for {conn_id}") as tg:
             src = check_source_connection.override(task_id=f"source_check_{conn_id}")(conn_id)
             tgt = check_target_connection.override(task_id=f"target_check_{conn_id}")(conn_id)
@@ -219,7 +219,7 @@ def hanger_lines_data_qcr():
 
         start >> tg >> end
 
-    summary = summarize_results.override(task_id="summary")(SOURCE_HANGER_LANE)
+    summary = summarize_results.override(task_id="summary")(SOURCE_HANGER_LANE_25_TO_29)
     leaf_tasks >> summary >> end
 
 dag = hanger_lines_data_qcr()

@@ -4,6 +4,9 @@ Works perfectly when Line_Desc = 'line-21', 'line-22', etc.
 """
 from __future__ import annotations
 
+import sys
+sys.path.insert(0, '/opt/airflow')
+
 import logging
 import gc
 from datetime import datetime, timedelta
@@ -17,6 +20,14 @@ from airflow.operators.empty import EmptyOperator
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
+# from scripts.constans.db_sources import TARGET_HANGER_LANE
+
+import sys
+import os
+# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# from dags.source_target_conn import TARGET_HANGER_LANE
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from scripts.constans.db_sources import TARGET_HANGER_LANE
 
 # ------------------------------------------------------------------

@@ -43,7 +43,15 @@ RUN echo "[FreeTDS]\nDescription=FreeTDS Driver\nDriver=/usr/lib/x86_64-linux-gn
 RUN echo "[global]\nTDS_Version = 7.0\nclient charset = UTF-8" > /etc/freetds/freetds.conf
 
 # Ensure group exists (create only if missing)
-RUN getent group airflow || groupadd -g ${HOST_GID} airflow
+RUN if [ "${HOST_GID}" = "0" ]; then \
+        # If GID is 0, modify existing root group if needed or create airflow group with different GID
+        getent group airflow || ( \
+            # Try to create airflow group, if it fails due to GID 0 conflict, use a different GID
+            groupadd -g ${HOST_GID} airflow 2>/dev/null || groupadd -g 50000 airflow \
+        ); \
+    else \
+        getent group airflow || groupadd -g ${HOST_GID} airflow; \
+    fi
 
 # Ensure user exists (create only if missing)
 RUN id -u airflow >/dev/null 2>&1 || \

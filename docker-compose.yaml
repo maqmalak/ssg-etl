@@ -49,7 +49,7 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.0.3}
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.11.0}
   # build: .
   environment:
     &airflow-common-env
@@ -65,6 +65,16 @@ x-airflow-common:
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
     AIRFLOW__WEBSERVER__SECRET_KEY: 'ZsEBRWVIh8R54hysJ4WQOu_38bXMKdIhCB0AdbOMRuA'
+    # Use Redis for rate limit storage instead of in-memory
+    FLASK_LIMITER_STORAGE_URL: redis://:@redis:6379/0
+    # Resource limits for better startup performance
+    AIRFLOW__CORE__PARALLELISM: '10'
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '10'
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: '60.0'
+    AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: '100'
+    AIRFLOW__WEBSERVER__WORKERS: '2'
+    AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: '240'
+    AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: '240'
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -72,7 +82,7 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     # WARNING: Use _PIP_ADDITIONAL_REQUIREMENTS option ONLY for a quick checks
     # for other purpose (development, test and especially production usage) build/extend Airflow image.
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-dask duckdb distributed boto3 psycopg2-binary apache-airflow-providers-amazon[s3fs] s3fs sqlalchemy-redshift apache-airflow-providers-redis apache-airflow-providers-common-sql apache-airflow-providers-microsoft-mssql asyncpg faker pyodbc pandas pendulum sqlalchemy pyspark==3.5.0 psutil py4j}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
@@ -101,7 +111,14 @@ services:
       POSTGRES_DB: airflow
     ports:
       - "5438:5432"
-
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '1.0'
+        reservations:
+          memory: 2G
+          cpus: '0.5'
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
@@ -115,8 +132,17 @@ services:
     # Redis is limited to 7.2-bookworm due to licencing change
     # https://redis.io/blog/redis-adopts-dual-source-available-licensing/
     image: redis:7.2-bookworm
+    command: redis-server --maxmemory 1600mb --maxmemory-policy allkeys-lru --appendonly yes
     expose:
       - 6379
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '0.4'
+        reservations:
+          memory: 1G
+          cpus: '0.4'
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -131,12 +157,20 @@ services:
     command: webserver
     ports:
       - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '1.5'
+        reservations:
+          memory: 1.5G
+          cpus: '0.8'
     healthcheck:
-      test: ["CMD-SHELL", "airflow config list | grep -q 'webserver'"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 20s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -146,6 +180,14 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '2.0'
+        reservations:
+          memory: 4G
+          cpus: '1.0'
     healthcheck:
       test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "${HOSTNAME}"']
       interval: 30s
@@ -161,6 +203,14 @@ services:
   airflow-dag-processor:
     <<: *airflow-common
     command: dag-processor
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '0.4'
+        reservations:
+          memory: 1G
+          cpus: '0.1'
     healthcheck:
       test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
       interval: 30s
@@ -173,9 +223,17 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  airflow-worker:
+  airflow-worker-1:
     <<: *airflow-common
     command: celery worker
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+          cpus: '3.5'
+        reservations:
+          memory: 6G
+          cpus: '2.0'
     healthcheck:
       # yamllint disable rule:line-length
       test:
@@ -190,17 +248,58 @@ services:
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
+      # Reduce celery concurrency for better stability
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
-      airflow-apiserver:
-        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker-2:
+    <<: *airflow-common
+    command: celery worker
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+          cpus: '3.5'
+        reservations:
+          memory: 6G
+          cpus: '2.0'
+    healthcheck:
+      # yamllint disable rule:line-length
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      <<: *airflow-common-env
+      # Required to handle warm shutdown of the celery workers properly
+      # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
+      DUMB_INIT_SETSID: "0"
+      # Reduce celery concurrency for better stability
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
 
   airflow-triggerer:
     <<: *airflow-common
     command: triggerer
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.4'
+        reservations:
+          memory: 0.5G
+          cpus: '0.2'
     healthcheck:
       test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
       interval: 30s
@@ -226,7 +325,7 @@ services:
           echo "If you are on Linux, you SHOULD follow the instructions below to set "
           echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
           echo "For other operating systems you can get rid of the warning with manually created .env file:"
-          echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#setting-the-right-airflow-user"
+          echo "    See: https://airflow.apache.org/docs/docker-stack/entrypoint.html#setting-the-right-airflow-user"
           echo
           export AIRFLOW_UID=$$(id -u)
         fi
@@ -266,14 +365,14 @@ services:
         echo
         echo "Creating missing opt dirs if missing:"
         echo
-        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
         echo
         echo "Airflow version:"
         /entrypoint airflow version
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /opt/airflow/{dags,plugins,config,scripts,sparkFiles}
         echo
         echo "Running airflow config list to create default config file if missing."
         echo
@@ -281,7 +380,7 @@ services:
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /opt/airflow/{dags,plugins,config,scripts,sparkFiles}
         echo
         echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
         echo
@@ -293,7 +392,7 @@ services:
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
+        ls -la /opt/airflow/{dags,plugins,config,scripts,sparkFiles}
 
     # yamllint enable rule:line-length
     environment:
@@ -302,7 +401,6 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-      _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
   airflow-cli:

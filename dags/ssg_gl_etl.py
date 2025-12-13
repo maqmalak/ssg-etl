@@ -23,12 +23,17 @@ from pendulum import timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from scripts.constans.db_sources import DATA_SOURCES_NAMES
+
+
 from dags.create_target_pg_gl_table import (
     GeneralLedgerTransaction,
     create_etl_log_table_if_not_exists,
     create_table_if_not_exists,
 )
-from scripts.constans.db_sources import DATA_SOURCES_NAMES
 
 # Configure logging
 logger = logging.getLogger(__name__)

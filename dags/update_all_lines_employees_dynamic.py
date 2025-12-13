@@ -19,7 +19,17 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 # Your project constant: list of target line connection IDs (e.g. ['line_21', 'line_22', ...])
-from scripts.constans.db_sources import TARGET_HANGER_LANE
+TARGET_HANGER_LANE = [
+    'line-21',
+    'line-22',
+    'line-23',
+    'line-24',
+    'line-25',
+    'line-26',
+    'line-27',
+    'line-28',
+    'line-29'
+]
 
 # ------------------------------------------------------------------
 # Configuration

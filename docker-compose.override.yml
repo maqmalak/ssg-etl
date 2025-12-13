@@ -4,8 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        HOST_UID: ${AIRFLOW_UID}
-        HOST_GID: ${AIRFLOW_GID}
+        HOST_UID: 50000
+        HOST_GID: 0
+    image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
       - .env
   airflow-scheduler:
@@ -13,8 +14,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        HOST_UID: ${AIRFLOW_UID}
-        HOST_GID: ${AIRFLOW_GID}
+        HOST_UID: 50000
+        HOST_GID: 0
+    image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
       - .env
   airflow-worker:
@@ -22,17 +24,19 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        HOST_UID: ${AIRFLOW_UID}
-        HOST_GID: ${AIRFLOW_GID}
+        HOST_UID: 50000
+        HOST_GID: 0
+    image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
-    - .env
+      - .env
   airflow-triggerer:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        HOST_UID: ${AIRFLOW_UID}
-        HOST_GID: ${AIRFLOW_GID}
+        HOST_UID: 50000
+        HOST_GID: 0
+    image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
       - .env
 
@@ -44,7 +48,14 @@ services:
       POSTGRES_DB: ssg
     ports:
       - "5435:5432"
-
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '0.8'
+        reservations:
+          memory: 2G
+          cpus: '0.4'
     volumes:
       - pg-grafan-db-volume:/var/lib/postgresql/data
     healthcheck:

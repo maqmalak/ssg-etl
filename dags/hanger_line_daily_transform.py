@@ -10,24 +10,31 @@ from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from pendulum import timezone
 import psycopg2
-import os
 import logging
 import sys
 from airflow.hooks.base import BaseHook
 
-# Add the scripts directory to the Python path
-scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
-sys.path.append(os.path.abspath(scripts_path))
+# Add the sparkFiles directory to the Python path
+# sparkfiles_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sparkFiles')
+# scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
+# sys.path.append(os.path.abspath(sparkfiles_path))
+# sys.path.append(os.path.abspath(scripts_path))
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-# Import functions from hanger_line_transform.py
+# Import functions from hangerline_transform_spark.py (working Spark implementation with optimized upsert)
 try:
-    from sparkFiles.hangerline_transform import (
+    from sparkFiles.hangerline_transform_upsert import (
         create_spark_session,
         transform_data
     )
-    print("Successfully imported functions from hanger_line_transform.py")
+    print("Successfully imported functions from hangerline_transform_spark.py")
 except ImportError as e:
-    print(f"Error importing functions from hanger_line_transform.py: {e}")
+    print(f"Error importing functions from hangerline_transform_spark.py: {e}")
+    import traceback
+    traceback.print_exc()
+
 
 # Timezone configuration
 PKT = timezone("Asia/Karachi")
@@ -109,7 +116,7 @@ def check_for_data(**context):
         logger.info("Executing query to count recent records in operator_daily_performance table")
         cursor.execute("""
             SELECT COUNT(*) FROM operator_daily_performance 
-            WHERE created_at >= CURRENT_DATE - INTERVAL '2 days'
+            WHERE created_at >= CURRENT_DATE - INTERVAL '3 days'
         """)
         count = cursor.fetchone()[0]
         
@@ -186,29 +193,36 @@ def log_end(**context):
 def execute_transformation(**context):
     """
     Execute the hanger line data transformation using imported functions.
+    Returns detailed transformation results as XCom.
     """
     logger.info("Starting hanger line data transformation")
-    
+
     try:
-        # Create Spark session
-        logger.info("Creating Spark session...")
-        spark = create_spark_session()
-        logger.info("Spark session created successfully")
-        
-        # Execute transformation
+        # Check if the functions were imported successfully
+        if 'create_spark_session' not in globals() or 'transform_data' not in globals():
+            raise RuntimeError("Required functions were not imported successfully. Check import errors above.")
+
+        # Execute transformation - note transform_data now returns a summary dict, not boolean
         logger.info("Executing data transformation...")
-        success = transform_data(spark)
-        
-        if success:
-            logger.info("Data transformation completed successfully")
-            return "Transformation completed successfully"
+        spark = create_spark_session()
+        results = transform_data(spark)  # transform_data handles its own Spark session now
+
+        # Return the complete results dictionary for XCom
+        if results and isinstance(results, dict):
+            logger.info(f"Transformation completed: {results.get('message', 'Unknown status')}")
+            return results
         else:
-            logger.warning("Data transformation completed with issues")
-            return "Transformation completed with issues"
-            
+            logger.warning("Transformation returned invalid results")
+            return {"success": False, "message": "Invalid transformation results"}
+
     except Exception as e:
         logger.error(f"Error during data transformation: {e}")
-        raise
+        # Return error details as XCom instead of raising exception
+        return {
+            "success": False,
+            "message": f"Transformation failed: {str(e)}",
+            "tables_processed": []
+        }
 
 # Define the DAG
 dag = DAG(
@@ -260,10 +274,39 @@ skip_task = EmptyOperator(
     dag=dag
 )
 
-# Save task
-save_task = PythonOperator(
+# Summary task that returns XCom results
+def summarize_transformation_results(**context):
+    """
+    Pull and summarize the transformation XCom results
+    """
+    ti = context['task_instance']
+    results = ti.xcom_pull(task_ids='transform_data')
+
+    if results and isinstance(results, dict):
+        logger.info("=== TRANSFORMATION SUMMARY ===")
+        logger.info(f"✅ Success: {results.get('success', False)}")
+        logger.info(f"📊 Data Loaded: {results.get('data_loaded', 0):,}")
+        logger.info(f"🔄 Data Filtered: {results.get('data_filtered', 0):,}")
+
+        # Log details for each table
+        tables_processed = results.get('tables_processed', [])
+        logger.info("📋 Tables Processed:")
+        for table_info in tables_processed:
+            table_name = table_info.get('table', 'Unknown')
+            record_count = table_info.get('records', 0)
+            logger.info(f"   • {table_name}: {record_count:,} records")
+
+        logger.info(f"💬 Message: {results.get('message', 'No message')}")
+        logger.info("=" * 50)
+
+        return results  # Return the complete results for downstream tasks
+    else:
+        logger.warning("No transformation results found in XCom")
+        return {"error": "No transformation results available"}
+
+summarize_task = PythonOperator(
     task_id='save_completion_status',
-    python_callable=lambda **context: logger.info("Transformation process completed and saved"),
+    python_callable=summarize_transformation_results,
     dag=dag
 )
 
@@ -278,5 +321,5 @@ end_task = PythonOperator(
 start_task >> check_data_task
 check_data_task >> has_data_label
 check_data_task >> no_data_label
-has_data_label >> transform_task >> save_task >> end_task
+has_data_label >> transform_task >> summarize_task >> end_task
 no_data_label >> skip_task >> end_task

@@ -7,7 +7,15 @@ from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
 from airflow.hooks.base_hook import BaseHook
 import pandas as pd
 from sqlalchemy import create_engine
+
+import sys
+import os
+# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# from dags.source_target_conn import SOURCE_HANGER_LANE
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from scripts.constans.db_sources import SOURCE_HANGER_LANE
+
+
 import logging
 
 

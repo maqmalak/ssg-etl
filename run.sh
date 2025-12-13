@@ -2,9 +2,9 @@
 
 set -e
 
-DETACH=true
-BUILD=false
-NO_CACHE=false
+DETACH=false
+BUILD=true
+NO_CACHE=true
 
 # Parse CLI args
 for arg in "$@"

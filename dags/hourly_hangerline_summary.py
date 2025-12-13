@@ -16,9 +16,15 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.hooks.base import BaseHook
 
+import sys
+import os
+# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# from dags.source_target_conn import SOURCE_HANGER_LANE
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 # Add scripts to path
-scripts_path = os.path.join(os.path.dirname(__file__), '..', 'scripts')
-sys.path.append(os.path.abspath(scripts_path))
+# scripts_path = os.path.join(os.path.dirname(__file__), '..', 'scripts')
+# sys.path.append(os.path.abspath(scripts_path))
 
 # Import helpers
 from upsert_utils import upsert_data_via_postgres, create_connection_params_from_airflow

@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
 import subprocess
-import os
 
 import pendulum
 import pyodbc
@@ -26,6 +25,19 @@ from pendulum import timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+import sys
+import os
+# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# from dags.source_target_conn import SOURCE_HANGER_LANE
+
+# import sys
+# sys.path.append('/opt/airflow/scripts')
+# from scripts.constans.db_sources import SOURCE_HANGER_LANE
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from scripts.constans.db_sources import SOURCE_HANGER_LANE
 
 # Import functions from hanger_line_transform.py
 try:
@@ -38,7 +50,6 @@ except ImportError as e:
     print(f"Error importing functions from hanger_line_transform.py: {e}")
 
 
-from scripts.constans.db_sources import SOURCE_HANGER_LANE
 from scripts.create_target_pg_hl_table import (
     HangerLaneData,
     create_etl_log_table_if_not_exists,
@@ -556,10 +567,10 @@ default_args = {
 }
 
 @dag(
-    dag_id="etl_ssg_hanger_lines",
+    dag_id="hanger_test",
     default_args=default_args,
     schedule="*/30 * * * *",  # Every 30 minutes
-    tags=["ssg", "erp", "etl"],
+    tags=["ssg", "test", "etl"],
     catchup=False,
     max_active_runs=1,
     description="ETL pipeline for Hanger lines data from MSSQL to PostgreSQL",

@@ -12,6 +12,10 @@ from airflow.hooks.base import BaseHook
 from urllib.parse import quote_plus
 from sqlalchemy import create_engine
 
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 # --- Imports from helpers ---
 from scripts.create_table_hourly import (
     create_hourly_table_if_not_exists,

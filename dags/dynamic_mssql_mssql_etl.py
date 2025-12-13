@@ -9,6 +9,9 @@ import uuid
 # from airflow.operators.python import get_current_context
 import logging
 import pyodbc
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from scripts.constans.db_sources import DATA_SOURCES_NAMES
 

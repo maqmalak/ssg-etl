@@ -1,7 +1,6 @@
--- =============================================
+
 --  RECREATE ALL VIEWS – CLEAN & SAFE VERSION
---  Run this entire script at once in SSMS
--- =============================================
+
 
 SET NOCOUNT ON;
 GO

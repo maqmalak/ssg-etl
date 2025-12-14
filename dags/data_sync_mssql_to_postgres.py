@@ -51,7 +51,7 @@ with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'creat
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp"]
+INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp","INAEmployees"]
 
 
 # INCLUDED_TABLES = ["Coa31", "Employees", "DefDepartments", "OperationBreakDown", "OperationBreakDown_Det"]

@@ -42,6 +42,13 @@ default_args = {
     "catchup": False,
 }
 
+# Project imports
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+# Load SQL script for creating views
+with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'create_view_ssg.sql'), 'r') as f:
+    create_view_ssg = f.read()
+
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
 INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp"]
@@ -170,6 +177,29 @@ def data_sync_mssql_to_postgres():
         logger.info(msg)
         ti.xcom_push(key="target_check", value=msg)
         return msg
+
+
+# Function to create the transactions table
+    # ---------------- LIST MSSQL TABLES ---------------- #
+    @task
+    def create_views() -> list:
+        conn = BaseHook.get_connection(MSSQL_CONN_ID)
+        logger.info(f"MSSQL Connection - Host: {conn.host}, Schema(Database): {conn.schema}, Login: {conn.login}")
+        conn_str = build_mssql_conn_str(conn)
+        logger.info(f"Full connection string (without password): DRIVER={{FreeTDS}};SERVER={conn.host};PORT=1433;DATABASE={conn.schema};UID={conn.login};...")
+        
+        with pyodbc.connect(conn_str, timeout=60) as c:
+          
+            cur = c.cursor()
+            # Split SQL script on GO statements and execute each batch
+            batches = [batch.strip() for batch in create_view_ssg.split('GO') if batch.strip()]
+            for batch in batches:
+                logger.info(f"Executing SQL batch: {batch[:100]}...")
+                cur.execute(batch)
+            tables = INCLUDED_VIEWS
+        logger.info(f"✅ Found {len(tables)} tables to sync: {tables}")
+        return tables
+
 
     # ---------------- LIST MSSQL TABLES ---------------- #
     @task
@@ -334,6 +364,7 @@ def data_sync_mssql_to_postgres():
     # ---------------------------------------------------------------- #
     src = source_check()
     tgt = target_check()
+    views = create_views()
     tables = list_tables()
 
     # Create the load tasks but control execution based on whether the table exists
@@ -346,7 +377,7 @@ def data_sync_mssql_to_postgres():
         results >> summary
 
     # Ensure source_check runs before target_check as requested: source_check >> target_check
-    [src,  tgt,  tables] >> tg 
+    [src >>  tgt >>  views >> tables] >> tg 
     tg >> end
 
 

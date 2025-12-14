@@ -19,7 +19,7 @@ services:
     image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
       - .env
-  airflow-worker:
+  airflow-worker-1:
     build:
       context: .
       dockerfile: Dockerfile
@@ -29,6 +29,17 @@ services:
     image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
     env_file:
       - .env
+  airflow-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UID: 50000
+        HOST_GID: 0
+    image: ${AIRFLOW_IMAGE_NAME:-ssg-airflow:2.11.0}
+    env_file:
+      - .env
+
   airflow-triggerer:
     build:
       context: .

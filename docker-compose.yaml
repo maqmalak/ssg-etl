@@ -60,6 +60,9 @@ x-airflow-common:
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: 'Asia/Karachi'
+    AIRFLOW__CORE__TIMER_UNIT_CONSISTENCY: 'true'
+    AIRFLOW__LOGGING__TRIGGERER_LOGGING_LEVEL: 'INFO'
     AIRFLOW__SCHEDULER__STANDALONE_DAG_PROCESSOR: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
@@ -238,7 +241,7 @@ services:
       # yamllint disable rule:line-length
       test:
         - "CMD-SHELL"
-        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
       interval: 30s
       timeout: 10s
       retries: 5
@@ -271,7 +274,7 @@ services:
       # yamllint disable rule:line-length
       test:
         - "CMD-SHELL"
-        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
       interval: 30s
       timeout: 10s
       retries: 5
@@ -381,6 +384,12 @@ services:
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{dags,plugins,config,scripts,sparkFiles}
+        echo
+        echo "Removing problematic symlinks before chown"
+        echo
+        rm -f /opt/airflow/logs/dag_processor/latest
+        rm -f /opt/airflow/logs/scheduler/latest
+        find /opt/airflow/logs -type l -name 'latest' -exec rm -f {} \;
         echo
         echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
         echo

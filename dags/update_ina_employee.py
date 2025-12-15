@@ -12,7 +12,7 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.models.baseoperator import chain
 
 # Mocking INA_DB for a runnable example
-INA_DB = ['ina-db']
+INA_DB = ['line-27']
 
 # ------------------------------------------------------------------
 # Config

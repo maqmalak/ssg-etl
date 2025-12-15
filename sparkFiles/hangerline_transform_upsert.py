@@ -278,8 +278,17 @@ def transform_data(spark):
             for cfg in TARGETS:
                 print(f"Processing target table: {cfg['table']}")
 
+                # Filter out records with null em_firstname for odp_date_employee table
+                # since em_firstname is part of the primary key and cannot be null
+                if cfg["table"] == "odp_date_employee":
+                    filtered_df = df.filter(df["em_firstname"].isNotNull())
+                    print(f"Filtered out {df.count() - filtered_df.count()} records with null em_firstname")
+                    df_to_process = filtered_df
+                else:
+                    df_to_process = df
+
                 # Create aggregated dataframe based on group columns
-                agg_df = df.groupBy(*cfg["group"]) \
+                agg_df = df_to_process.groupBy(*cfg["group"]) \
                           .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
 
                 # Count records before upsert

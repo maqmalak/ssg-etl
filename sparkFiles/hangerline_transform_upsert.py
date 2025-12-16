@@ -217,7 +217,7 @@ def transform_data(spark):
                (SELECT odp_date, oc_description, shift, odp_em_key, em_firstname,
                     odpd_quantity, source_connection
                 FROM operator_daily_performance
-                WHERE odp_date >= CURRENT_DATE - INTERVAL '3 days') t
+                WHERE odp_date >= CURRENT_DATE - INTERVAL '15 days') t
             """
 
             df = spark.read \

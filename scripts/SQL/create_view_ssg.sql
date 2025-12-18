@@ -114,6 +114,7 @@ SELECT
     e.ID,
     REPLACE(e.ID, '-', '') AS INA_ID,
     e.Title,
+		e.FatherName,
     e.Desig_ID,
     e.Deptt_ID,
     e.Line_ID                     AS Current_Line_ID,
@@ -141,10 +142,12 @@ SELECT
 
     e.Location_ID,
     e.Joindate,
+		e.ResignDate,
+		e.NICNew as NIC,
     e.add1,
     e.Mobile,
-    e.ActiveStatus,
-    e.Male
+    case when e.ActiveStatus='Active' then 0 else 1 end as ActiveStatus,
+    case when e.Male=1 then 'M' else 'F' end as gender
 
 FROM dbo.EmployeeDetails e
 LEFT JOIN (
@@ -166,6 +169,7 @@ LEFT JOIN (
 
 WHERE e.Deptt_ID = '1-06-13'
   AND e.ActiveStatus = 'active';
+  
 GO
 
 PRINT 'All 5 views recreated successfully!';

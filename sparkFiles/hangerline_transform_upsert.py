@@ -257,8 +257,8 @@ def transform_data(spark):
                     .load()
                 
                 # Filter the data to only include records from the last day
-                from pyspark.sql.functions import current_date, date_sub
-                df = df.filter(df["odp_date"] >= date_sub(current_date(), 1))
+                # from pyspark.sql.functions import current_date, date_sub
+                # df = df.filter(df["odp_date"] >= date_sub(current_date(), 1))
                 
                 print(f"Data loaded and filtered successfully without explicit driver. Row count: {df.count()}")
             except Exception as retry_e:
@@ -289,14 +289,23 @@ def transform_data(spark):
 
                 # Filter out records with null em_firstname for odp_date_employee table
                 # since em_firstname is part of the primary key and cannot be null
-                if cfg["table"] == "odp_date_employee":
+                if cfg["table"] == "odp_date_oc":
                     # Avoid double count() on large DataFrames; compute only if you need the metric.
-                    filtered_df = df.filter(df["em_firstname"].isNotNull())
+                    filtered_df = df.filter(df["em_firstname"].isNotNull() )
                     if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
                         filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
                         filtered_count = filtered_df.count()
                         print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
                     df_to_process = filtered_df
+                if cfg["table"] == "odp_date_employee":
+                    # Avoid double count() on large DataFrames; compute only if you need the metric.
+                    filtered_df = df.filter(df["oc_description"].isNotNull())
+                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
+                        filtered_count = filtered_df.count()
+                        print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
+                    df_to_process = filtered_df
+
                 else:
                     df_to_process = df
 

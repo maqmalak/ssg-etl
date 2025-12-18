@@ -20,15 +20,16 @@ from airflow.utils.trigger_rule import TriggerRule
 
 # Your project constant: list of target line connection IDs (e.g. ['line_21', 'line_22', ...])
 TARGET_HANGER_LANE = [
-    'line-21',
-    'line-22',
-    'line-23',
-    'line-24',
-    'line-25',
-    'line-26',
-    'line-27',
-    'line-28',
-    'line-29'
+    'ina-db-6r'
+    # 'line-21',
+    # 'line-22',
+    # 'line-23',
+    # 'line-24',
+    # 'line-25',
+    # 'line-26',
+    # 'line-27'
+    # 'line-28',
+    # 'line-29'
 ]
 
 # ------------------------------------------------------------------
@@ -48,7 +49,7 @@ default_args = {
 }
 
 SOURCE_CONN_ID = "SilverStr"
-CHUNK_SIZE = 800  # Safe & fast for FreeTDS + MERGE
+CHUNK_SIZE = 50  # Reduced to avoid SQL Server 2100 parameter limit (500 * 4 = 2000 params)
 
 
 # ------------------------------------------------------------------
@@ -88,7 +89,7 @@ def build_mssql_conn_str(conn):
 @dag(
     dag_id="update_all_lines_employees_dynamic",
     default_args=default_args,
-    schedule="*/30 8-23,0-1 * * 1-6",  # Every 30 mins during shift hours
+    schedule="*/60 8-23,0-1 * * 1-6",  # Every 60 mins during shift hours
     tags=["ssg", "hangerline", "employee", "master"],
     max_active_runs=1,
     catchup=False,
@@ -133,15 +134,21 @@ def update_all_lines_employees_dynamic():
 
         logger.info("Starting fetch from '%s' for line '%s' (mapped from conn_id: %s)", SOURCE_CONN_ID, line_desc, line_conn_id_norm)
 
-        sql = ("""
+        sql = """
             SELECT
                 INA_ID AS EM_Key,
                 Title AS EM_FirstName,
+                FatherName AS EM_LastName,
                 Latest_Line_ID AS EM_Department,
-                ID AS EM_SSN
+                ID AS EM_SSN,
+                ActiveStatus,
+                joindate AS EM_JoinDate,
+                ResignDate AS EM_ResignDate,
+                NIC as EM_NIC,
+                gender AS EM_Gender
             FROM dbo.hangerline_emp
             WHERE INA_ID IS NOT NULL
-        """, line_conn_id)
+        """
 
         with pyodbc.connect(conn_str, timeout=30) as cnxn:
             cursor = cnxn.cursor()
@@ -177,9 +184,16 @@ def update_all_lines_employees_dynamic():
 
             payload.append({
                 "em_key": em_key,
-                "em_firstname": r["EM_FirstName"] if r["EM_FirstName"] else None,
-                "department": r["EM_Department"] if r["EM_Department"] else None,
-                "em_ssn": r["EM_SSN"] if r["EM_SSN"] else None,
+                "em_firstname": r.get("EM_FirstName"),
+                "em_lastname": r.get("EM_LastName"),
+                "department": r.get("EM_Department"),
+                "em_ssn": r.get("EM_SSN"),
+                "em_nic": r.get("EM_NIC"),
+                "em_joindate": r.get("EM_JoinDate"),
+                "em_resigndate": r.get("EM_ResignDate"),
+                "em_gender": r.get("EM_Gender"),
+                "em_activestatus": r.get("ActiveStatus"),
+
             })
         logger.info("Prepared %d valid records for upsert", len(payload))
         return payload
@@ -193,16 +207,23 @@ def update_all_lines_employees_dynamic():
         merge_sql = """
             MERGE IHS_SHARED.dbo.Employee_Master_ERP AS T
             USING (VALUES {values}) 
-                AS S (EM_Key, EM_FirstName, EM_Department, EM_SSN)
+                AS S (EM_Key, EM_FirstName, EM_LastName, EM_Department, EM_SSN, EM_NIC, EM_DateHired, EM_TerminationDate, EM_Gender, EM_ActiveStatus)
             ON T.EM_Key = S.EM_Key
             WHEN MATCHED THEN
                 UPDATE SET 
                     EM_FirstName = S.EM_FirstName,
+                    EM_LastName = S.EM_LastName,
                     EM_Department = S.EM_Department,
-                    EM_SSN = S.EM_SSN
+                    EM_SSN = S.EM_SSN,
+                    EM_ID = S.EM_NIC,
+                    EM_DateHired = S.EM_DateHired,
+                    EM_TerminationDate = S.EM_TerminationDate,
+                    EM_Sex = S.EM_Gender,
+                    EM_Resigned = S.EM_ActiveStatus
+
             WHEN NOT MATCHED THEN
-                INSERT (EM_Key, EM_FirstName, EM_Department, EM_SSN)
-                VALUES (S.EM_Key, S.EM_FirstName, S.EM_Department, S.EM_SSN);
+                INSERT (EM_Key, EM_FirstName, EM_LastName, EM_Department, EM_SSN, EM_ID, EM_DateHired, EM_TerminationDate,EM_Resigned,EM_Sex)
+                VALUES (S.EM_Key, S.EM_FirstName, S.EM_LastName, S.EM_Department, S.EM_SSN, S.EM_NIC, S.EM_DateHired, S.EM_TerminationDate, S.EM_ActiveStatus, S.EM_Gender);
         """
 
         stats = {"attempted": 0, "succeeded": 0}
@@ -212,12 +233,18 @@ def update_all_lines_employees_dynamic():
                 values = []
                 params = []
                 for rec in chunk:
-                    values.append("(?, ?, ?, ?)")
+                    values.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                     params.extend([
                         rec["em_key"],
                         rec["em_firstname"],
+                        rec["em_lastname"],
                         rec["department"],
-                        rec["em_ssn"]
+                        rec["em_ssn"],
+                        rec["em_nic"],
+                        rec["em_joindate"],
+                        rec["em_resigndate"],
+                        rec["em_gender"],
+                        rec["em_activestatus"]
                     ])
 
                 sql = merge_sql.format(values=", ".join(values))
@@ -235,10 +262,16 @@ def update_all_lines_employees_dynamic():
                     # Fallback: row-by-row
                     for rec in chunk:
                         try:
-                            single_sql = merge_sql.format(values="(?, ?, ?, ?)")
+                            single_sql = merge_sql.format(values="(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                             cur.execute(single_sql, (
                                 rec["em_key"], rec["em_firstname"],
-                                rec["department"], rec["em_ssn"]
+                                rec["em_lastname"],
+                                rec["department"], rec["em_ssn"],
+                                rec["em_nic"], rec["em_joindate"],
+                                rec["em_resigndate"], rec["em_gender"],
+                                rec["em_activestatus"],
+                       
+                                rec
                             ))
                             cnxn.commit()
                             stats["succeeded"] += 1

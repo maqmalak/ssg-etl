@@ -86,7 +86,7 @@ x-airflow-common:
     # WARNING: Use _PIP_ADDITIONAL_REQUIREMENTS option ONLY for a quick checks
     # for other purpose (development, test and especially production usage) build/extend Airflow image.
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-dask duckdb distributed boto3 psycopg2-binary apache-airflow-providers-amazon[s3fs] s3fs sqlalchemy-redshift apache-airflow-providers-redis apache-airflow-providers-common-sql apache-airflow-providers-microsoft-mssql asyncpg faker pyodbc pandas pendulum sqlalchemy pyspark==3.5.0 psutil py4j}
-    # The following line can be used to set a custom config file, stored in the local config folder
+    # The following line can be used to custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
@@ -391,13 +391,9 @@ services:
         rm -f /opt/airflow/logs/scheduler/latest
         find /opt/airflow/logs -type l -name 'latest' -exec rm -f {} \;
         echo
-        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
-        echo
-        chown -R "${AIRFLOW_UID}:0" /opt/airflow/
-        echo
         echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
         echo
-        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
+        ionice -c 3 chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
         echo
         echo "Files in shared volumes:"
         echo
@@ -429,7 +425,7 @@ services:
 
   # You can enable flower by adding "--profile flower" option e.g. docker-compose --profile flower up
   # or by explicitly targeted on the command line e.g. docker-compose up flower.
-  # See: https://docs.docker.com/compose/profiles/
+  # See https://docs.docker.com/compose/profiles/
   flower:
     <<: *airflow-common
     command: celery flower

@@ -37,6 +37,7 @@ print(f"db_utils.py exists: {os.path.exists(os.path.join(dags_path, 'db_utils.py
 try:
     from pyspark.sql import SparkSession
     from pyspark.sql.functions import sum as spark_sum, first, lit, current_date, date_sub
+    from pyspark import StorageLevel
     print("Successfully imported PySpark modules")
 except ImportError as e:
     print(f"Error importing PySpark modules: {e}")
@@ -58,6 +59,13 @@ def create_spark_session():
     """Create and configure Spark session"""
     print("Creating Spark session...")
     try:
+        # Spark UI / networking (helps with browser access when running in containers)
+        # You can override via env vars:
+        #   SPARK_UI_PORT=4040
+        #   SPARK_UI_BIND=0.0.0.0
+        spark_ui_port = os.getenv("SPARK_UI_PORT")
+        spark_ui_bind = os.getenv("SPARK_UI_BIND")
+
         # Locate the path to the newer PostgreSQL JDBC driver
         # Try multiple possible paths
         possible_driver_paths = [
@@ -65,45 +73,42 @@ def create_spark_session():
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "jdbc-drivers", "postgresql-42.7.3.jar"),
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "postgresql-42.7.3.jar")
         ]
-        
+
         jdbc_driver_path = None
         for path in possible_driver_paths:
             if os.path.exists(path):
                 jdbc_driver_path = path
                 print(f"Found PostgreSQL JDBC driver at {jdbc_driver_path}")
                 break
-        
-        # If no driver found, try to download it
+
         if not jdbc_driver_path:
             print("PostgreSQL JDBC driver not found at any expected location")
-            
+
+        builder = (
+            SparkSession.builder
+            .appName("HangerLaneDataTransformation")
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+            .config("spark.driver.memory", "4g")
+            .config("spark.executor.memory", "4g")
+            .config("spark.executor.cores", "4")
+            .config("spark.driver.cores", "2")
+            .config("spark.sql.shuffle.partitions", "200")
+        )
+
         if jdbc_driver_path and os.path.exists(jdbc_driver_path):
             print(f"Using PostgreSQL JDBC driver: {jdbc_driver_path}")
-            # Create Spark session with explicit JDBC driver configuration
-            spark = SparkSession.builder \
-                .appName("HangerLaneDataTransformation") \
-                .config("spark.jars", jdbc_driver_path) \
-                .config("spark.sql.adaptive.enabled", "true") \
-                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-                .config("spark.driver.memory", "4g") \
-                .config("spark.executor.memory", "4g") \
-                .config("spark.executor.cores", "4") \
-                .config("spark.driver.cores", "2") \
-                .config("spark.sql.shuffle.partitions", "200") \
-                .getOrCreate()
-        else:
-            print("Creating session without explicit JDBC driver...")
-            spark = SparkSession.builder \
-                .appName("HangerLaneDataTransformation") \
-                .config("spark.sql.adaptive.enabled", "true") \
-                .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-                .config("spark.driver.memory", "4g") \
-                .config("spark.executor.memory", "4g") \
-                .config("spark.executor.cores", "4") \
-                .config("spark.driver.cores", "2") \
-                .config("spark.sql.shuffle.partitions", "200") \
-                .getOrCreate()
-        
+            builder = builder.config("spark.jars", jdbc_driver_path)
+
+        # Optional: bind UI and pick a fixed port (useful for docker port-mapping)
+        if spark_ui_port:
+            builder = builder.config("spark.ui.port", spark_ui_port)
+        if spark_ui_bind:
+            # For driver in containers; makes the UI listen on 0.0.0.0 instead of only localhost
+            builder = builder.config("spark.driver.bindAddress", spark_ui_bind)
+
+        spark = builder.getOrCreate()
+
         print("Spark session created successfully")
         return spark
     except Exception as e:
@@ -228,15 +233,16 @@ def transform_data(spark):
                 .option("password", postgres_jdbc_properties["password"]) \
                 .option("driver", "org.postgresql.Driver") \
                 .load()
-            
-            print(f"Data loaded successfully. Row count: {df.count()}")
 
-            # Filter the data to only include records from the last day
-            # We'll do this after loading to avoid SQL dialect issues
-            # from pyspark.sql.functions import current_date, date_sub
-            # df = df.filter(df["odp_date"] >= date_sub(current_date(), 1))
-            
-            print(f"Data filtered successfully. Row count: {df.count()}")
+            # Avoid multiple expensive actions (.count) throughout the pipeline.
+            # Persist once after reading because we reuse df multiple times.
+            df = df.persist(StorageLevel.MEMORY_AND_DISK)
+
+            row_count = df.count()
+            print(f"Data loaded successfully. Row count: {row_count}")
+
+            # (Optional) additional Spark-side filtering can be done here.
+            print(f"Data filtered successfully. Row count: {row_count}")
         except Exception as e:
             print(f"Error reading data from PostgreSQL with explicit driver: {str(e)}")
             # If we can't read data with explicit driver, try without specifying the driver
@@ -260,12 +266,15 @@ def transform_data(spark):
                 # If we still can't read data, return early
                 return False
         
-        # Check if table exists and has data
-        try:
-            row_count = df.count()
-        except Exception as e:
-            print(f"Error counting rows: {str(e)}")
-            row_count = 0
+        # Check if table exists and has data (row_count already computed in the primary read path)
+        # If we ended up in fallback read path, compute it once here.
+        if 'row_count' not in locals():
+            try:
+                df = df.persist(StorageLevel.MEMORY_AND_DISK)
+                row_count = df.count()
+            except Exception as e:
+                print(f"Error counting rows: {str(e)}")
+                row_count = 0
             
         if row_count == 0:
             print("Warning: No data found in operator_daily_performance table for the last day")
@@ -281,8 +290,12 @@ def transform_data(spark):
                 # Filter out records with null em_firstname for odp_date_employee table
                 # since em_firstname is part of the primary key and cannot be null
                 if cfg["table"] == "odp_date_employee":
+                    # Avoid double count() on large DataFrames; compute only if you need the metric.
                     filtered_df = df.filter(df["em_firstname"].isNotNull())
-                    print(f"Filtered out {df.count() - filtered_df.count()} records with null em_firstname")
+                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
+                        filtered_count = filtered_df.count()
+                        print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
                     df_to_process = filtered_df
                 else:
                     df_to_process = df
@@ -291,12 +304,14 @@ def transform_data(spark):
                 agg_df = df_to_process.groupBy(*cfg["group"]) \
                           .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
 
-                # Count records before upsert
-                try:
-                    record_count = agg_df.count()
-                except Exception as e:
-                    print(f"Error counting records for {cfg['table']}: {str(e)}")
-                    record_count = 0
+                # Counting triggers a full Spark job. Make it optional (only for debugging/metrics).
+                record_count = None
+                if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                    try:
+                        record_count = agg_df.count()
+                    except Exception as e:
+                        print(f"Error counting records for {cfg['table']}: {str(e)}")
+                        record_count = 0
 
                 # Perform upsert for this target
                 success = upsert_data_via_spark(
@@ -319,10 +334,13 @@ def transform_data(spark):
 
                 tables_processed.append({
                     "table": cfg["table"],
-                    "records": record_count
+                    "records": record_count if record_count is not None else "(count disabled)"
                 })
 
-                print(f"Successfully upserted {record_count} records to {cfg['table']} table")
+                if record_count is not None:
+                    print(f"Successfully upserted {record_count} records to {cfg['table']} table")
+                else:
+                    print(f"Successfully upserted records to {cfg['table']} table (count disabled)")
 
         except Exception as e:
             print(f"Error processing data with TARGETS: {str(e)}")
@@ -350,6 +368,13 @@ def transform_data(spark):
         return False
     finally:
         try:
+            # Unpersist if we cached the main df
+            if 'df' in locals():
+                try:
+                    df.unpersist(blocking=False)
+                except Exception:
+                    pass
+
             spark.stop()
             print("Spark session stopped")
         except:

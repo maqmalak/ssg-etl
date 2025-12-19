@@ -164,7 +164,17 @@ def update_all_lines_employees_dynamic():
                 rows = []
             else:
                 cols = [col[0] for col in cursor.description]
-                rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+                raw_rows = cursor.fetchall()
+
+                # Convert datetime objects to strings for JSON serialization
+                rows = []
+                for row in raw_rows:
+                    row_dict = dict(zip(cols, row))
+                    # Convert datetime/timestamp objects to ISO format strings
+                    for key, value in row_dict.items():
+                        if hasattr(value, 'isoformat'):  # Check if it's a datetime-like object
+                            row_dict[key] = value.isoformat()
+                    rows.append(row_dict)
 
         logger.info("Fetched %d employees for line: %s (mapped from conn_id: %s)", len(rows), line_desc, line_conn_id_norm)
         return rows

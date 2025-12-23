@@ -44,6 +44,7 @@ SELECT
     a.vno,
     a.Dated,
     b.SubOperation_ID,
+    a.TotalSMV,
     b.SMV,
     b.Machine
 FROM dbo.OperationBreakDown a

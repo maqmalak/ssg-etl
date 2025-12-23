@@ -41,12 +41,12 @@ def format_data(res):
 
 def stream_data():
     import json
-    # from kafka import KafkaProducer
+    from kafka import KafkaProducer
     import time
 
     logging.basicConfig(level=logging.INFO)  # Ensure logging is configured
     try:
-        # producer = KafkaProducer(bootstrap_servers=['localhost:9092'], max_block_ms=10000)
+        producer = KafkaProducer(bootstrap_servers=['broker:29092'], max_block_ms=10000)
         curr_time = time.time()
         while time.time() < curr_time + 60:  # Run for 1 minute
             try:
@@ -54,11 +54,11 @@ def stream_data():
                 res = format_data(res)
                 logging.info(f"Sending data: {res}")
                 print(f'data: {res}')
-                # producer.send('users_created', json.dumps(res).encode('utf-8'))
+                producer.send('users_created', json.dumps(res).encode('utf-8'))
                 time.sleep(1)  # Add delay to avoid rapid API calls and overwhelming the system
             except Exception as e:
                 logging.error(f'Error in loop: {e}')
-        # producer.flush()  # Ensure all messages are sent
+        producer.flush()  # Ensure all messages are sent
     except Exception as e:
         logging.error(f'Kafka connection error: {e}')
         raise

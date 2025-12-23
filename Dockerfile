@@ -23,18 +23,14 @@ RUN apt-get update && \
         libsybdb5 \
         libct4 \
         openjdk-17-jre \
-        tdsodbc && \
+        tdsodbc \
+        build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Download and install Microsoft ODBC Driver 17 for SQL Server directly
 RUN curl -sSL https://packages.microsoft.com/debian/12/prod/pool/main/m/msodbcsql17/msodbcsql17_17.10.5.1-1_amd64.deb -o msodbcsql17.deb && \
     ACCEPT_EULA=Y dpkg -i msodbcsql17.deb && \
     rm msodbcsql17.deb
-
-# Install system build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Configure ODBC for FreeTDS
 RUN echo "[FreeTDS]\nDescription=FreeTDS Driver\nDriver=/usr/lib/x86_64-linux-gnu/odbc/libtdsodbc.so\nSetup=/usr/lib/x86_64-linux-gnu/odbc/libtdsS.so\nUsageCount=1" >> /etc/odbcinst.ini
@@ -67,7 +63,8 @@ USER airflow
 
 # Copy and install Python dependencies
 COPY requirements.txt /opt/airflow/
-ENV PYTHONPATH=/opt/airflow/scripts:$PYTHONPATH
+ARG PYTHONPATH
+ENV PYTHONPATH=/opt/airflow/scripts${PYTHONPATH:+:$PYTHONPATH}
 
 # Upgrade pip and install dependencies with retry options
 RUN pip install --upgrade pip && \

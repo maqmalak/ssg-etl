@@ -21,3 +21,7 @@ psutil
 
 # Additional dependencies for Spark
 py4j
+
+# Kafka integration libraries
+kafka-python>=2.0.0
+confluent-kafka>=2.3.0

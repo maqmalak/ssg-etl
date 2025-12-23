@@ -284,38 +284,187 @@ def update_all_lines_employees():
                     stats["attempted"], stats["succeeded"])
         return stats
 
+    @task
+    def flatten_employee_lists(employee_lists: List[List[Dict]]) -> List[Dict]:
+        """Flatten list of employee lists into single list"""
+        all_employees = []
+        for employee_list in employee_lists:
+            all_employees.extend(employee_list)
+        logger.info("Flattened %d employee lists into %d total employees",
+                   len(employee_lists), len(all_employees))
+        return all_employees
+
+    @task
+    def group_employees_by_department(payload: List[Dict]) -> Dict[str, List[Dict]]:
+        """Group employees by EM_Department"""
+        department_groups = {}
+        for employee in payload:
+            dept = employee.get("department") or "Unknown"
+            if dept not in department_groups:
+                department_groups[dept] = []
+            department_groups[dept].append(employee)
+
+        logger.info("Grouped employees into %d departments: %s",
+                   len(department_groups), list(department_groups.keys()))
+        return department_groups
+
+    @task
+    def process_departments_by_group(dept_groups: Dict[str, List[Dict]], target_conn_id: str):
+        """Process all departments and return summaries"""
+        department_summaries = []
+
+        # Get database connection for upsert operations
+        conn = BaseHook.get_connection(target_conn_id)
+        merge_sql = """
+            MERGE IHS_SHARED.dbo.Employee_Master_ERP AS T
+            USING (VALUES {values})
+                AS S (EM_Key, EM_FirstName, EM_LastName, EM_Department, EM_SSN, EM_NIC, EM_DateHired, EM_TerminationDate, EM_Gender, EM_ActiveStatus)
+            ON T.EM_Key = S.EM_Key
+            WHEN MATCHED THEN
+                UPDATE SET
+                    EM_FirstName = S.EM_FirstName,
+                    EM_LastName = S.EM_LastName,
+                    EM_Department = S.EM_Department,
+                    EM_SSN = S.EM_SSN,
+                    EM_ID = S.EM_NIC,
+                    EM_DateHired = S.EM_DateHired,
+                    EM_TerminationDate = S.EM_TerminationDate,
+                    EM_Sex = S.EM_Gender,
+                    EM_Resigned = S.EM_ActiveStatus
+
+            WHEN NOT MATCHED THEN
+                INSERT (EM_Key, EM_FirstName, EM_LastName, EM_Department, EM_SSN, EM_ID, EM_DateHired, EM_TerminationDate,EM_Resigned,EM_Sex)
+                VALUES (S.EM_Key, S.EM_FirstName, S.EM_LastName, S.EM_Department, S.EM_SSN, S.EM_NIC, S.EM_DateHired, S.EM_TerminationDate, S.EM_ActiveStatus, S.EM_Gender);
+        """
+
+        for dept_name, dept_employees in dept_groups.items():
+            if not dept_employees:
+                continue
+
+            # Perform upsert directly in this task
+            stats = {"attempted": 0, "succeeded": 0}
+
+            with pyodbc.connect(build_conn_str(conn), autocommit=False) as cnxn:
+                cur = cnxn.cursor()
+                for chunk in chunked(dept_employees, CHUNK_SIZE):
+                    values = []
+                    params = []
+                    for rec in chunk:
+                        values.append("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                        params.extend([
+                            rec["em_key"],
+                            rec["em_firstname"],
+                            rec["em_lastname"],
+                            rec["department"],
+                            rec["em_ssn"],
+                            rec["em_nic"],
+                            rec["em_joindate"],
+                            rec["em_resigndate"],
+                            rec["em_gender"],
+                            rec["em_activestatus"]
+                        ])
+
+                    sql = merge_sql.format(values=", ".join(values))
+
+                    try:
+                        cur.execute(sql, params)
+                        cnxn.commit()
+                        n = len(chunk)
+                        stats["attempted"] += n
+                        stats["succeeded"] += n
+                        logger.info("Upserted %d rows for department %s", n, dept_name)
+                    except Exception as e:
+                        cnxn.rollback()
+                        logger.error("Batch failed for department %s: %s", dept_name, e)
+                        # Fallback: row-by-row
+                        for rec in chunk:
+                            try:
+                                single_sql = merge_sql.format(values="(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                                cur.execute(single_sql, (
+                                    rec["em_key"], rec["em_firstname"],
+                                    rec["em_lastname"],
+                                    rec["department"], rec["em_ssn"],
+                                    rec["em_nic"], rec["em_joindate"],
+                                    rec["em_resigndate"], rec["em_gender"],
+                                    rec["em_activestatus"]
+                                ))
+                                cnxn.commit()
+                                stats["succeeded"] += 1
+                            except Exception as e2:
+                                logger.error("Failed EM_Key=%s in department %s: %s", rec["em_key"], dept_name, e2)
+                            stats["attempted"] += 1
+
+            # Create summary for this department
+            summary = {
+                "department": dept_name,
+                "employee_count": len(dept_employees),
+                "upsert_attempted": stats["attempted"],
+                "upsert_succeeded": stats["succeeded"]
+            }
+
+            # Log summary
+            logger.info("=== DEPARTMENT PROCESSING SUMMARY ===")
+            logger.info("Department: %s", dept_name)
+            logger.info("Employees in department: %d", len(dept_employees))
+            logger.info("Employees upserted - attempted: %d, succeeded: %d",
+                       summary["upsert_attempted"], summary["upsert_succeeded"])
+            logger.info("Processing status: %s",
+                       "SUCCESS" if summary["upsert_succeeded"] > 0 else "NO DATA PROCESSED")
+            logger.info("=" * 50)
+
+            department_summaries.append(summary)
+
+        return department_summaries
+
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def finalize():
-        logger.info("All lines processed.")
+    def finalize(department_summaries: List[Dict[str, Any]]):
+        logger.info("=== FINAL DEPARTMENT PROCESSING SUMMARY ===")
+        total_employees = sum(summary.get("employee_count", 0) for summary in department_summaries)
+        total_attempted = sum(summary.get("upsert_attempted", 0) for summary in department_summaries)
+        total_succeeded = sum(summary.get("upsert_succeeded", 0) for summary in department_summaries)
+
+        logger.info("TOTAL DEPARTMENTS PROCESSED: %d", len(department_summaries))
+        logger.info("TOTAL EMPLOYEES PROCESSED: %d", total_employees)
+        logger.info("TOTAL EMPLOYEES UPSERTED - attempted: %d, succeeded: %d", total_attempted, total_succeeded)
+
+        for summary in department_summaries:
+            logger.info("  %s: %d employees, %d/%d upserted",
+                       summary.get("department", "Unknown"),
+                       summary.get("employee_count", 0),
+                       summary.get("upsert_succeeded", 0),
+                       summary.get("upsert_attempted", 0))
+
+        logger.info("All departments processed successfully.")
         return "COMPLETED"
 
     # ——————————————————————————————————————————————————————————————
-    # Orchestration: One TaskGroup per target line
+    # Orchestration: Process all lines, then group by department
     # ——————————————————————————————————————————————————————————————
     source_check_task = check_source()
-    leaf_tasks = []
 
+    # First, process all lines to collect all employees
+    all_employees = []
     for line_conn_id in TARGET_HANGER_LANE:
         safe = safe_id(line_conn_id)
 
-        with TaskGroup(group_id=f"line_{safe}", tooltip=f"Process {line_conn_id}") as tg:
-
+        with TaskGroup(group_id=f"line_{safe}", tooltip=f"Fetch from {line_conn_id}") as tg:
             tgt_check = check_target(line_conn_id)
             raw_data = fetch_employees(line_conn_id)
             clean_data = prepare_payload(raw_data)
-            upsert = upsert_batch(clean_data, line_conn_id)
 
-            tgt_check >> raw_data >> clean_data >> upsert
-            leaf_tasks.append(upsert)
+            tgt_check >> raw_data >> clean_data
+            all_employees.append(clean_data)
 
         # Connect to common start + source check
         start >> source_check_task >> tg
 
-    # Finalize when all lines done
-    finalize_task = finalize()
-    for leaf in leaf_tasks:
-        leaf >> finalize_task
+    # Flatten employee lists and group by department
+    flattened_employees = flatten_employee_lists(all_employees)
+    dept_groups = group_employees_by_department(flattened_employees)
+    department_summaries = process_departments_by_group(dept_groups, TARGET_HANGER_LANE[0])
 
+    # Finalize when all departments done
+    finalize_task = finalize(department_summaries)
     finalize_task >> end
 
 

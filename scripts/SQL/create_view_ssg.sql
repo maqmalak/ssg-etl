@@ -167,9 +167,9 @@ LEFT JOIN (
     WHERE rn = 1
 ) c ON c.Emp_ID = e.ID
 
-WHERE e.Deptt_ID = '1-06-13'
---   AND CAST(e.modified_at AS DATE) = CAST(GETDATE() AS DATE) -- Fixed: proper date comparison for today
-    ;
+WHERE Deptt_ID = '1-06-13'
+  AND Location_ID BETWEEN '040' AND '041'
+  AND ActiveStatus = 'active';
   
 GO
 

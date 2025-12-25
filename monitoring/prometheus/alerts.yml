@@ -1,0 +1,209 @@
+# Prometheus Alert Rules for ETL Pipeline
+groups:
+  - name: system_alerts
+    interval: 30s
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage detected on {{ $labels.instance }}"
+          description: "CPU usage is above 80% (current: {{ $value }}%)"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 85% (current: {{ $value }}%)"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 15% (current: {{ $value }}%)"
+
+  - name: airflow_alerts
+    interval: 30s
+    rules:
+      - alert: AirflowTaskFailureRate
+        expr: rate(airflow_task_instance_failures[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: airflow
+        annotations:
+          summary: "High task failure rate in Airflow"
+          description: "Task failure rate is {{ $value }} per second"
+
+      - alert: AirflowSchedulerDown
+        expr: up{job="airflow-statsd"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: airflow
+        annotations:
+          summary: "Airflow scheduler appears to be down"
+          description: "Cannot scrape metrics from Airflow StatsD exporter"
+
+      - alert: AirflowWorkerDown
+        expr: airflow_celery_worker_up == 0
+        for: 3m
+        labels:
+          severity: critical
+          component: airflow
+        annotations:
+          summary: "Airflow worker is down"
+          description: "Worker {{ $labels.worker }} is not responding"
+
+      - alert: AirflowQueueBacklog
+        expr: airflow_executor_queued_tasks > 100
+        for: 10m
+        labels:
+          severity: warning
+          component: airflow
+        annotations:
+          summary: "Large task queue backlog"
+          description: "{{ $value }} tasks queued for more than 10 minutes"
+
+  - name: database_alerts
+    interval: 30s
+    rules:
+      - alert: PostgreSQLDown
+        expr: up{job=~"postgres-.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL {{ $labels.database }} is down"
+          description: "Cannot reach PostgreSQL exporter for {{ $labels.database }}"
+
+      - alert: PostgreSQLConnectionPoolHigh
+        expr: pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "PostgreSQL connection pool usage high"
+          description: "Connection pool usage is {{ $value }}% for {{ $labels.database }}"
+
+      - alert: PostgreSQLSlowQueries
+        expr: rate(pg_stat_statements_mean_exec_time[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Slow queries detected in PostgreSQL"
+          description: "Average query time is {{ $value }}ms"
+
+  - name: redis_alerts
+    interval: 30s
+    rules:
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Cannot reach Redis exporter"
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis memory usage is {{ $value }}%"
+
+      - alert: RedisRejectedConnections
+        expr: rate(redis_rejected_connections_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis rejecting connections"
+          description: "Redis is rejecting {{ $value }} connections per second"
+
+  - name: spark_alerts
+    interval: 30s
+    rules:
+      - alert: SparkMasterDown
+        expr: up{job="spark-master"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: spark
+        annotations:
+          summary: "Spark Master is down"
+          description: "Cannot reach Spark Master metrics endpoint"
+
+      - alert: SparkWorkerDown
+        expr: up{job="spark-workers"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: spark
+        annotations:
+          summary: "Spark Worker is down"
+          description: "Spark Worker {{ $labels.instance }} is not responding"
+
+      - alert: SparkJobFailureRate
+        expr: rate(spark_job_failures_total[10m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: spark
+        annotations:
+          summary: "High Spark job failure rate"
+          description: "Spark job failure rate is {{ $value }} per second"
+
+  - name: container_alerts
+    interval: 30s
+    rules:
+      - alert: ContainerHighCPU
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: docker
+        annotations:
+          summary: "Container {{ $labels.name }} high CPU usage"
+          description: "CPU usage is {{ $value }}%"
+
+      - alert: ContainerHighMemory
+        expr: container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: docker
+        annotations:
+          summary: "Container {{ $labels.name }} high memory usage"
+          description: "Memory usage is {{ $value }}% of limit"
+
+      - alert: ContainerRestarting
+        expr: rate(container_last_seen{name!=""}[5m]) > 2
+        for: 2m
+        labels:
+          severity: warning
+          component: docker
+        annotations:
+          summary: "Container {{ $labels.name }} is restarting frequently"
+          description: "Container has restarted {{ $value }} times in the last 5 minutes"

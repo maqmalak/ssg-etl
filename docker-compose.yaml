@@ -70,9 +70,9 @@ x-airflow-common:
     AIRFLOW__WEBSERVER__SECRET_KEY: 'ZsEBRWVIh8R54hysJ4WQOu_38bXMKdIhCB0AdbOMRuA'
     # Use Redis for rate limit storage instead of in-memory
     FLASK_LIMITER_STORAGE_URL: redis://:@redis:6379/0
-    # Resource limits for better startup performance
-    AIRFLOW__CORE__PARALLELISM: '10'
-    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '10'
+    # Resource limits optimized for 24 cores and 64GB RAM
+    AIRFLOW__CORE__PARALLELISM: '32'
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '24'
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: '60.0'
     AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: '100'
     AIRFLOW__WEBSERVER__WORKERS: '2'
@@ -232,10 +232,10 @@ services:
       resources:
         limits:
           memory: 4G
-          cpus: '1.0'
+          cpus: '1.5'
         reservations:
           memory: 2G
-          cpus: '0.5'
+          cpus: '0.8'
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
@@ -249,17 +249,17 @@ services:
     # Redis is limited to 7.2-bookworm due to licencing change
     # https://redis.io/blog/redis-adopts-dual-source-available-licensing/
     image: redis:7.2-bookworm
-    command: redis-server --maxmemory 1600mb --maxmemory-policy allkeys-lru --appendonly yes
+    command: redis-server --maxmemory 2500mb --maxmemory-policy allkeys-lru --appendonly yes
     expose:
       - 6379
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '0.4'
+          memory: 3G
+          cpus: '1.0'
         reservations:
-          memory: 1G
-          cpus: '0.4'
+          memory: 1.5G
+          cpus: '0.5'
     networks:
       - airflow_network
 
@@ -306,11 +306,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
-          cpus: '2.0'
+          memory: 10G
+          cpus: '3.0'
         reservations:
-          memory: 4G
-          cpus: '1.0'
+          memory: 5G
+          cpus: '1.5'
     networks:
       - airflow_network
 
@@ -332,11 +332,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '0.4'
+          memory: 2.5G
+          cpus: '1.0'
         reservations:
-          memory: 1G
-          cpus: '0.1'
+          memory: 1.5G
+          cpus: '0.5'
     networks:
       - airflow_network
 
@@ -358,11 +358,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 12G
-          cpus: '3.5'
+          memory: 14G
+          cpus: '4.0'
         reservations:
-          memory: 6G
-          cpus: '2.0'
+          memory: 7G
+          cpus: '2.5'
     networks:
       - airflow_network
 
@@ -380,8 +380,8 @@ services:
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
-      # Reduce celery concurrency for better stability
-      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
+      # Optimized celery concurrency for better throughput
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '12'
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -394,11 +394,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 12G
-          cpus: '3.5'
+          memory: 14G
+          cpus: '4.0'
         reservations:
-          memory: 6G
-          cpus: '2.0'
+          memory: 7G
+          cpus: '2.5'
     networks:
       - airflow_network
 
@@ -416,8 +416,8 @@ services:
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
-      # Reduce celery concurrency for better stability
-      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
+      # Optimized celery concurrency for better throughput
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '12'
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -431,10 +431,10 @@ services:
       resources:
         limits:
           memory: 1G
-          cpus: '0.4'
+          cpus: '0.5'
         reservations:
           memory: 0.5G
-          cpus: '0.2'
+          cpus: '0.25'
     networks:
       - airflow_network
 
@@ -594,6 +594,14 @@ services:
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
       - spark-master-data:/opt/spark/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '0.5'
+        reservations:
+          memory: 1G
+          cpus: '0.25'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 10s
@@ -604,7 +612,7 @@ services:
     networks:
       - airflow_network
 
-  spark-worker:
+  spark-worker-1:
     image: apache/spark:3.5.0
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     depends_on:
@@ -612,22 +620,56 @@ services:
         condition: service_healthy
     environment:
       SPARK_MODE: worker
-      SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 4g
+      SPARK_WORKER_CORES: 6
+      SPARK_WORKER_MEMORY: 6g
       SPARK_MASTER_URL: spark://spark-master:7077
       # Configure JDBC drivers in classpath
       SPARK_EXTRA_CLASSPATH: /opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar:/opt/spark/work/jdbc-drivers/client-2.1.jar:/opt/spark/work/jdbc-drivers/saslprep-1.1.jar:/opt/spark/work/jdbc-drivers/stringprep-1.1.jar
     volumes:
       - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
-      - spark-worker-data:/opt/spark/data
+      - spark-worker-1-data:/opt/spark/data
     deploy:
       resources:
         limits:
-          memory: 6g
-          cpus: '2.0'
+          memory: 8G
+          cpus: '3.0'
         reservations:
-          memory: 4g
-          cpus: '1.0'
+          memory: 6G
+          cpus: '2.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://spark-master:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: always
+    networks:
+      - airflow_network
+
+  spark-worker-2:
+    image: apache/spark:3.5.0
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    environment:
+      SPARK_MODE: worker
+      SPARK_WORKER_CORES: 6
+      SPARK_WORKER_MEMORY: 6g
+      SPARK_MASTER_URL: spark://spark-master:7077
+      # Configure JDBC drivers in classpath
+      SPARK_EXTRA_CLASSPATH: /opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar:/opt/spark/work/jdbc-drivers/client-2.1.jar:/opt/spark/work/jdbc-drivers/saslprep-1.1.jar:/opt/spark/work/jdbc-drivers/stringprep-1.1.jar
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
+      - spark-worker-2-data:/opt/spark/data
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '3.0'
+        reservations:
+          memory: 6G
+          cpus: '2.0'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://spark-master:8080"]
       interval: 10s
@@ -659,4 +701,5 @@ networks:
 volumes:
   postgres-db-volume:
   spark-master-data:
-  spark-worker-data:
+  spark-worker-1-data:
+  spark-worker-2-data:

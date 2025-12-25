@@ -1,0 +1,272 @@
+# Monitoring Stack for ETL Pipeline
+# Usage: docker-compose -f docker-compose.yaml -f docker-compose.monitoring.yml up -d
+---
+services:
+  # Prometheus - Metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts/alerts.yml:ro
+      - prometheus-data:/prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    networks:
+      - airflow_network
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=redis-datasource,grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 256M
+          cpus: '0.1'
+    networks:
+      - airflow_network
+    restart: always
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node Exporter - System metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.1'
+        reservations:
+          memory: 64M
+          cpus: '0.05'
+    networks:
+      - airflow_network
+    restart: always
+
+  # PostgreSQL Exporter - Airflow Metadata DB
+  postgres-exporter-airflow:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-airflow
+    environment:
+      DATA_SOURCE_NAME: "postgresql://airflow:airflow@postgres:5432/airflow?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    ports:
+      - "9187:9187"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+        reservations:
+          memory: 128M
+          cpus: '0.05'
+    networks:
+      - airflow_network
+    restart: always
+    depends_on:
+      - postgres
+
+  # PostgreSQL Exporter - Warehouse DB
+  postgres-exporter-warehouse:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter-warehouse
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@pg_warehouse:5432/ssg?sslmode=disable"
+    ports:
+      - "9188:9187"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+        reservations:
+          memory: 128M
+          cpus: '0.05'
+    networks:
+      - airflow_network
+    restart: always
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    environment:
+      REDIS_ADDR: "redis:6379"
+      REDIS_PASSWORD: ""
+    ports:
+      - "9121:9121"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+        reservations:
+          memory: 128M
+          cpus: '0.05'
+    networks:
+      - airflow_network
+    restart: always
+    depends_on:
+      - redis
+
+  # StatsD Exporter - Airflow metrics
+  statsd-exporter:
+    image: prom/statsd-exporter:latest
+    container_name: statsd-exporter
+    command:
+      - '--statsd.mapping-config=/etc/statsd/statsd_mapping.yml'
+    ports:
+      - "9102:9102"
+      - "9125:9125/udp"
+    volumes:
+      - ./monitoring/statsd_mapping.yml:/etc/statsd/statsd_mapping.yml:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.15'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    networks:
+      - airflow_network
+    restart: always
+
+  # cAdvisor - Container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.2'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    networks:
+      - airflow_network
+    restart: always
+    privileged: true
+    devices:
+      - /dev/kmsg
+
+  # AlertManager (Optional)
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/config.yml:/etc/alertmanager/config.yml:ro
+      - alertmanager-data:/alertmanager
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.15'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    networks:
+      - airflow_network
+    restart: always
+    profiles:
+      - alerting
+
+  # Airflow services - Enable StatsD metrics
+  airflow-scheduler:
+    environment:
+      AIRFLOW__METRICS__STATSD_ON: 'true'
+      AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+      AIRFLOW__METRICS__STATSD_PORT: 9125
+      AIRFLOW__METRICS__STATSD_PREFIX: airflow
+      
+  airflow-worker-1:
+    environment:
+      AIRFLOW__METRICS__STATSD_ON: 'true'
+      AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+      AIRFLOW__METRICS__STATSD_PORT: 9125
+      AIRFLOW__METRICS__STATSD_PREFIX: airflow
+      
+  airflow-worker-2:
+    environment:
+      AIRFLOW__METRICS__STATSD_ON: 'true'
+      AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+      AIRFLOW__METRICS__STATSD_PORT: 9125
+      AIRFLOW__METRICS__STATSD_PREFIX: airflow
+
+networks:
+  airflow_network:
+    name: ssg-etl_airflow_network
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:

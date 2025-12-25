@@ -1,0 +1,93 @@
+# Prometheus Configuration for ETL Pipeline Monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'etl-pipeline'
+    environment: 'docker-desktop'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "/etc/prometheus/alerts/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # Node Exporter - System metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          instance: 'docker-host'
+
+  # PostgreSQL Exporters
+  - job_name: 'postgres-airflow'
+    static_configs:
+      - targets: ['postgres-exporter-airflow:9187']
+        labels:
+          service: 'postgresql'
+          database: 'airflow-metadata'
+
+  - job_name: 'postgres-warehouse'
+    static_configs:
+      - targets: ['postgres-exporter-warehouse:9187']
+        labels:
+          service: 'postgresql'
+          database: 'warehouse'
+
+  # Redis Exporter
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          role: 'celery-broker'
+
+  # Airflow StatsD Exporter
+  - job_name: 'airflow-statsd'
+    static_configs:
+      - targets: ['statsd-exporter:9102']
+        labels:
+          service: 'airflow'
+          component: 'statsd-metrics'
+
+  # Docker container metrics (cAdvisor)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          service: 'docker-containers'
+
+  # Spark Master metrics
+  - job_name: 'spark-master'
+    metrics_path: '/metrics/prometheus'
+    static_configs:
+      - targets: ['spark-master:8080']
+        labels:
+          service: 'spark'
+          component: 'master'
+
+  # Spark Workers metrics
+  - job_name: 'spark-workers'
+    metrics_path: '/metrics/prometheus'
+    static_configs:
+      - targets: 
+          - 'spark-worker-1:8081'
+          - 'spark-worker-2:8081'
+        labels:
+          service: 'spark'
+          component: 'worker'

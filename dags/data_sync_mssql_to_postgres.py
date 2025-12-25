@@ -377,7 +377,7 @@ def data_sync_mssql_to_postgres():
         results >> summary
 
     # Ensure source_check runs before target_check as requested: source_check >> target_check
-    [src >>  tgt >>  views >> tables] >> tg 
+    [src >>  tgt >>  tables] >> tg 
     tg >> end
 
 

@@ -7,7 +7,7 @@ ETL DAG: MSSQL → PostgreSQL Table Sync (Lowercase + Replace Mode)
 ✅ Replaces PostgreSQL tables each sync
 ✅ Loads data in safe chunks with type inference
 ✅ Logs progress & pushes XCom for summary
-✅ Runs every 30 min, Mon–Sat (8 AM–2 AM PKT)
+✅ Runs every 30 min, Mon-Sat (8 AM-2 AM PKT)
 """
 
 from __future__ import annotations
@@ -51,7 +51,13 @@ with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'creat
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp","INAEmployees"]
+INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp","Article"]
+
+TARGETS = [
+    {"table": "OperationInformation",        "group": ["odp_date", "oc_description", "source_connection"], "pk": ["odp_date", "oc_description", "source_connection"]},
+    {"table": "odp_date_shift",     "group": ["odp_date", "shift", "source_connection"],         "pk": ["odp_date", "shift", "source_connection"]},
+    {"table": "odp_date_employee",  "group": ["odp_date", "odp_em_key", "em_firstname", "source_connection"], "pk": ["odp_date", "odp_em_key","em_firstname", "source_connection"]},
+]
 
 
 # INCLUDED_TABLES = ["Coa31", "Employees", "DefDepartments", "OperationBreakDown", "OperationBreakDown_Det"]
@@ -364,7 +370,7 @@ def data_sync_mssql_to_postgres():
     # ---------------------------------------------------------------- #
     src = source_check()
     tgt = target_check()
-    views = create_views()
+    # views = create_views()
     tables = list_tables()
 
     # Create the load tasks but control execution based on whether the table exists

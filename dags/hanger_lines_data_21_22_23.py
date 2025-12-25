@@ -66,7 +66,7 @@ def make_result(status: str, step: str, connection_id: str, message: str) -> dic
     dag_id="hanger_lines_data_21_22-23",
     default_args=default_args,
     schedule="2,12,22,32,42,52 8-23,0-1 * * 1-6",  # ✅ Every 10 min, 8AM–2AM, Mon–Sat
-    tags=["ssg", "hangerline", "data", "upsert"],
+    tags=["ssg", "hangerline", "data", "6R"],
     max_active_runs=1,
     catchup=False,
     description="ETL pipeline for Hanger Lines Data (8 AM-2 AM PKT, Mon-Sat)",

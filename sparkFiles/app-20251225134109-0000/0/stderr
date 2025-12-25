@@ -1,0 +1,52 @@
+Spark Executor Command: "/opt/java/openjdk/bin/java" "-cp" "/opt/airflow/sparkFiles/jdbc-drivers/postgresql-42.7.3.jar:/opt/spark/work/jdbc-drivers/*:/opt/spark/conf:/opt/spark/jars/*" "-Xmx5120M" "-Dspark.network.timeout=600s" "-Dspark.ui.port=4040" "-Dspark.driver.port=33473" "-Djava.net.preferIPv6Addresses=false" "-XX:+IgnoreUnrecognizedVMOptions" "--add-opens=java.base/java.lang=ALL-UNNAMED" "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED" "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED" "--add-opens=java.base/java.io=ALL-UNNAMED" "--add-opens=java.base/java.net=ALL-UNNAMED" "--add-opens=java.base/java.nio=ALL-UNNAMED" "--add-opens=java.base/java.util=ALL-UNNAMED" "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED" "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED" "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED" "--add-opens=java.base/sun.nio.cs=ALL-UNNAMED" "--add-opens=java.base/sun.security.action=ALL-UNNAMED" "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED" "--add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED" "-Djdk.reflect.useDirectMethodHandle=false" "org.apache.spark.executor.CoarseGrainedExecutorBackend" "--driver-url" "spark://CoarseGrainedScheduler@059ed3ca839a:33473" "--executor-id" "0" "--hostname" "172.20.0.15" "--cores" "3" "--app-id" "app-20251225134109-0000" "--worker-url" "spark://Worker@172.20.0.15:33829" "--resourceProfileId" "0"
+========================================
+
+Using Spark's default log4j profile: org/apache/spark/log4j2-defaults.properties
+25/12/25 13:41:17 INFO CoarseGrainedExecutorBackend: Started daemon with process name: 289@2157687d80bd
+25/12/25 13:41:17 INFO SignalUtils: Registering signal handler for TERM
+25/12/25 13:41:17 INFO SignalUtils: Registering signal handler for HUP
+25/12/25 13:41:17 INFO SignalUtils: Registering signal handler for INT
+25/12/25 13:41:20 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+25/12/25 13:41:20 INFO SecurityManager: Changing view acls to: spark,airflow
+25/12/25 13:41:20 INFO SecurityManager: Changing modify acls to: spark,airflow
+25/12/25 13:41:20 INFO SecurityManager: Changing view acls groups to: 
+25/12/25 13:41:20 INFO SecurityManager: Changing modify acls groups to: 
+25/12/25 13:41:20 INFO SecurityManager: SecurityManager: authentication disabled; ui acls disabled; users with view permissions: spark, airflow; groups with view permissions: EMPTY; users with modify permissions: spark, airflow; groups with modify permissions: EMPTY
+25/12/25 13:41:21 INFO TransportClientFactory: Successfully created connection to 059ed3ca839a/172.20.0.17:33473 after 133 ms (0 ms spent in bootstraps)
+25/12/25 13:41:21 INFO SecurityManager: Changing view acls to: spark,airflow
+25/12/25 13:41:21 INFO SecurityManager: Changing modify acls to: spark,airflow
+25/12/25 13:41:21 INFO SecurityManager: Changing view acls groups to: 
+25/12/25 13:41:21 INFO SecurityManager: Changing modify acls groups to: 
+25/12/25 13:41:21 INFO SecurityManager: SecurityManager: authentication disabled; ui acls disabled; users with view permissions: spark, airflow; groups with view permissions: EMPTY; users with modify permissions: spark, airflow; groups with modify permissions: EMPTY
+25/12/25 13:41:21 INFO TransportClientFactory: Successfully created connection to 059ed3ca839a/172.20.0.17:33473 after 4 ms (0 ms spent in bootstraps)
+25/12/25 13:41:21 INFO DiskBlockManager: Created local directory at /tmp/spark-536592b9-30af-4a85-b56d-56bbaa9dd82b/executor-75bb6b1a-2b59-4041-b5c4-836fad4e3c07/blockmgr-39e70580-cc8b-4ab1-bdef-65d52f827ae7
+25/12/25 13:41:21 INFO MemoryStore: MemoryStore started with capacity 3.8 GiB
+25/12/25 13:41:22 INFO CoarseGrainedExecutorBackend: Connecting to driver: spark://CoarseGrainedScheduler@059ed3ca839a:33473
+25/12/25 13:41:22 INFO WorkerWatcher: Connecting to worker spark://Worker@172.20.0.15:33829
+25/12/25 13:41:22 INFO TransportClientFactory: Successfully created connection to /172.20.0.15:33829 after 16 ms (0 ms spent in bootstraps)
+25/12/25 13:41:22 INFO WorkerWatcher: Successfully connected to spark://Worker@172.20.0.15:33829
+25/12/25 13:41:22 INFO ResourceUtils: ==============================================================
+25/12/25 13:41:22 INFO ResourceUtils: No custom resources configured for spark.executor.
+25/12/25 13:41:22 INFO ResourceUtils: ==============================================================
+25/12/25 13:41:22 INFO CoarseGrainedExecutorBackend: Successfully registered with driver
+25/12/25 13:41:22 INFO Executor: Starting executor ID 0 on host 172.20.0.15
+25/12/25 13:41:22 INFO Executor: OS info Linux, 6.12.54-linuxkit, amd64
+25/12/25 13:41:22 INFO Executor: Java version 11.0.20.1
+25/12/25 13:41:22 INFO Utils: Successfully started service 'org.apache.spark.network.netty.NettyBlockTransferService' on port 42369.
+25/12/25 13:41:22 INFO NettyBlockTransferService: Server created on 172.20.0.15:42369
+25/12/25 13:41:22 INFO BlockManager: Using org.apache.spark.storage.RandomBlockReplicationPolicy for block replication policy
+25/12/25 13:41:22 INFO BlockManagerMaster: Registering BlockManager BlockManagerId(0, 172.20.0.15, 42369, None)
+25/12/25 13:41:22 INFO BlockManagerMaster: Registered BlockManager BlockManagerId(0, 172.20.0.15, 42369, None)
+25/12/25 13:41:22 INFO BlockManager: Initialized BlockManager: BlockManagerId(0, 172.20.0.15, 42369, None)
+25/12/25 13:41:22 INFO Executor: Starting executor with user classpath (userClassPathFirst = false): ''
+25/12/25 13:41:22 INFO Executor: Created or updated repl class loader org.apache.spark.util.MutableURLClassLoader@591123b7 for default.
+25/12/25 13:41:22 INFO Executor: Fetching spark://059ed3ca839a:33473/jars/postgresql-42.7.3.jar with timestamp 1766670067713
+25/12/25 13:41:22 INFO TransportClientFactory: Successfully created connection to 059ed3ca839a/172.20.0.17:33473 after 3 ms (0 ms spent in bootstraps)
+25/12/25 13:41:22 INFO Utils: Fetching spark://059ed3ca839a:33473/jars/postgresql-42.7.3.jar to /tmp/spark-536592b9-30af-4a85-b56d-56bbaa9dd82b/executor-75bb6b1a-2b59-4041-b5c4-836fad4e3c07/spark-d824891e-756f-4411-814b-056e700ee65f/fetchFileTemp8553083547391599165.tmp
+25/12/25 13:41:22 INFO Utils: Copying /tmp/spark-536592b9-30af-4a85-b56d-56bbaa9dd82b/executor-75bb6b1a-2b59-4041-b5c4-836fad4e3c07/spark-d824891e-756f-4411-814b-056e700ee65f/9535328221766670067713_cache to /opt/spark/work/app-20251225134109-0000/0/./postgresql-42.7.3.jar
+25/12/25 13:41:22 INFO Executor: Adding file:/opt/spark/work/app-20251225134109-0000/0/./postgresql-42.7.3.jar to class loader default
+25/12/25 13:41:33 INFO BlockManager: Removing RDD 15
+25/12/25 13:41:33 INFO CoarseGrainedExecutorBackend: Driver commanded a shutdown
+25/12/25 13:41:33 INFO MemoryStore: MemoryStore cleared
+25/12/25 13:41:34 INFO BlockManager: BlockManager stopped
+25/12/25 13:41:34 INFO ShutdownHookManager: Shutdown hook 

@@ -48,7 +48,7 @@ logger.setLevel(logging.INFO)
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
-    'start_date': datetime(2025, 11, 20, tzinfo=PKT),
+    'start_date': datetime(2025, 12, 25, tzinfo=PKT),
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
     'execution_timeout': timedelta(hours=1),
@@ -144,13 +144,13 @@ def execute_transformation(**context):
 
 # Define the DAG
 dag = DAG(
-    'hanger_line_daily_transform',
+    'hanger_lines_data_7A',
     default_args=default_args,
-    description='Daily transformation of hanger line data',
+    description="ETL pipeline for Hanger Lines Data 7A (8 AM-2 AM PKT, Mon-Sat)",
     # schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
-    schedule="*/7 8-23,0-1 * * 1-6",  # ✅ Every 7 min, 8AM–2AM, Mon–Sat
+    schedule="2,12,22,32,42,52 8-23,0-1 * * 1-6",  # ✅ Every 10 min, 8AM–2AM, Mon–Sat
+    tags=["ssg", "hangerline", "data", "upsert","7A"],
     catchup=False,
-    tags=['ssg', 'hanger_line', 'transformation'],
     max_active_runs=1
 )
 

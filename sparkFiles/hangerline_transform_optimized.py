@@ -1,46 +1,51 @@
 """
-Optimized PySpark ETL script for transforming hanger lane data.
-This script reads data from the pg-ssg database, performs aggregation with proper ETL practices, and saves the result.
+PySpark ETL script for transforming hanger lane data.
+This script reads data from the pg-ssg database, performs aggregation, and saves the result.
 """
 
 import sys
+import glob
+import psycopg2
 import os
 import logging
-import time
-from datetime import datetime
-from typing import Dict, Any, Tuple
+from pendulum import timezone
+from datetime import datetime, timedelta
 
+from airflow.hooks.base import BaseHook
 # Add the dags directory to the Python path so we can import db_utils
 dags_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dags')
-sys.path.append(os.path.abspath(dags_path))
+# sys.path.append(os.path.abspath(dags_path))
+
+
+
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+# Timezone configuration
+PKT = timezone("Asia/Karachi")
 
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+TARGETS = [
+    {"table": "odp_date_oc",        "group": ["odp_date", "oc_description", "source_connection"], "pk": ["odp_date", "oc_description", "source_connection"]},
+    {"table": "odp_date_shift",     "group": ["odp_date", "shift", "source_connection"],         "pk": ["odp_date", "shift", "source_connection"]},
+    {"table": "odp_date_employee",  "group": ["odp_date", "odp_em_key", "em_firstname", "source_connection"], "pk": ["odp_date", "odp_em_key","em_firstname", "source_connection"]},
+]
+
 print(f"Python path: {sys.path}")
 print(f"DAGs path exists: {os.path.exists(dags_path)}")
 print(f"db_utils.py exists: {os.path.exists(os.path.join(dags_path, 'db_utils.py'))}")
 
-from scripts.create_table_hourly import (
-    create_target_table_if_not_exists,
-    create_etl_log_odp_table_if_not_exists
-)
-
 try:
-    from pyspark.sql import functions as F
     from pyspark.sql import SparkSession
-    from pyspark.sql.functions import (
-        sum as spark_sum, count, max as spark_max, min as spark_min,
-        current_date, date_sub, current_timestamp, lit, when, col
-    )
-    from pyspark.sql.types import (
-        StructType, StructField, StringType, IntegerType, DoubleType, DateType
-    )
+    from pyspark.sql.functions import sum as spark_sum, first, lit, current_date, date_sub
+    from pyspark import StorageLevel
     print("Successfully imported PySpark modules")
 except ImportError as e:
     print(f"Error importing PySpark modules: {e}")
     sys.exit(1)
+
 
 try:
     from dags.db_utils import (
@@ -54,82 +59,126 @@ except ImportError as e:
     sys.exit(1)
 
 
-class ETLConfig:
-    """Configuration class for ETL process"""
-    
-    def __init__(self):
-        self.data_freshness_threshold_hours = int(os.getenv('DATA_FRESHNESS_THRESHOLD', '48'))
-        self.spark_executor_memory = os.getenv('SPARK_EXECUTOR_MEMORY', '4g')
-        self.spark_driver_memory = os.getenv('SPARK_DRIVER_MEMORY', '4g')
-        self.spark_shuffle_partitions = int(os.getenv('SPARK_SHUFFLE_PARTITIONS', '200'))
-        self.max_partition_bytes = os.getenv('SPARK_MAX_PARTITION_BYTES', '134217728')  # 128MB
-        self.enable_adaptive_query_execution = os.getenv('SPARK_ADAPTIVE_ENABLED', 'true').lower() == 'true'
-    
-    def validate(self):
-        """Validate configuration values"""
-        if self.data_freshness_threshold_hours <= 0:
-            raise ValueError("Data freshness threshold must be positive")
-        if self.spark_shuffle_partitions <= 0:
-            raise ValueError("Spark shuffle partitions must be positive")
-
-
-def create_spark_session_optimized(config: ETLConfig) -> SparkSession:
-    """Create and configure optimized Spark session"""
-    logger.info("Creating optimized Spark session...")
-    
+def create_spark_session():
+    """Create and configure Spark session with optimized settings"""
+    print("Creating Spark session...")
     try:
-        # Locate the path to the PostgreSQL JDBC driver
+        # Spark UI / networking (helps with browser access when running in containers)
+        # You can override via env vars:
+        #   SPARK_UI_PORT=4040
+        #   SPARK_UI_BIND=0.0.0.0
+        spark_ui_port = os.getenv("SPARK_UI_PORT", "4040")
+        spark_ui_bind = os.getenv("SPARK_UI_BIND")
+        
+        # Get Spark master URL from environment or use default
+        spark_master = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
+        print(f"Connecting to Spark master: {spark_master}")
+
+        # Locate the path to the newer PostgreSQL JDBC driver
+        # Try multiple possible paths
         possible_driver_paths = [
             "/opt/airflow/sparkFiles/jdbc-drivers/postgresql-42.7.3.jar",
+            "/opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "jdbc-drivers", "postgresql-42.7.3.jar"),
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "postgresql-42.7.3.jar")
         ]
-        
+
         jdbc_driver_path = None
         for path in possible_driver_paths:
             if os.path.exists(path):
                 jdbc_driver_path = path
-                logger.info(f"Found PostgreSQL JDBC driver at {jdbc_driver_path}")
+                print(f"✓ Found PostgreSQL JDBC driver at {jdbc_driver_path}")
                 break
-        
-        builder = SparkSession.builder \
-            .appName("HangerLaneDataTransformation") \
-            .config("spark.sql.adaptive.enabled", str(config.enable_adaptive_query_execution).lower()) \
-            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
-            .config("spark.sql.adaptive.skewedJoin.enabled", "true") \
-            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-            .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
-            .config("spark.driver.memory", config.spark_driver_memory) \
-            .config("spark.executor.memory", config.spark_executor_memory) \
-            .config("spark.driver.maxResultSize", "2g") \
-            .config("spark.sql.shuffle.partitions", str(config.spark_shuffle_partitions)) \
-            .config("spark.sql.files.maxPartitionBytes", config.max_partition_bytes)
-        
-        # Add JDBC driver if found
+
+        if not jdbc_driver_path:
+            print("⚠ PostgreSQL JDBC driver not found at any expected location")
+
+        # Build Spark session with optimized resource allocation
+        builder = (
+            SparkSession.builder
+            .appName("HangerLaneDataTransformation")
+            .master(spark_master)  # ← Explicitly connect to Spark cluster
+            
+            # Adaptive Query Execution for better performance
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+            .config("spark.sql.adaptive.skewJoin.enabled", "true")
+            
+            # Optimized resource allocation (balanced for 2 workers with 4 cores/6GB each)
+            .config("spark.driver.memory", "2g")           # Reduced from 4g
+            .config("spark.executor.memory", "5g")         # Increased from 4g  
+            .config("spark.executor.cores", "3")           # Reduced from 4 (better balance)
+            .config("spark.driver.cores", "1")             # Reduced from 2
+            .config("spark.executor.instances", "2")       # Use both workers
+            
+            # Dynamic shuffle partitions (will be adjusted based on data size)
+            .config("spark.sql.shuffle.partitions", "100")  # Reduced from 200
+            
+            # Memory management
+            .config("spark.memory.fraction", "0.8")
+            .config("spark.memory.storageFraction", "0.3")
+            
+            # Serialization optimization
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.kryoserializer.buffer.max", "512m")
+            
+            # Network timeout settings
+            .config("spark.network.timeout", "600s")
+            .config("spark.executor.heartbeatInterval", "60s")
+        )
+
+        # Configure JDBC driver classpath (multiple approaches for reliability)
         if jdbc_driver_path and os.path.exists(jdbc_driver_path):
-            builder = builder.config("spark.jars", jdbc_driver_path)
-            logger.info(f"Using PostgreSQL JDBC driver: {jdbc_driver_path}")
+            print(f"✓ Using PostgreSQL JDBC driver: {jdbc_driver_path}")
+            builder = (builder
+                .config("spark.jars", jdbc_driver_path)
+                .config("spark.driver.extraClassPath", f"{jdbc_driver_path}:/opt/spark/work/jdbc-drivers/*")
+                .config("spark.executor.extraClassPath", f"{jdbc_driver_path}:/opt/spark/work/jdbc-drivers/*")
+            )
         else:
-            logger.warning("PostgreSQL JDBC driver not found, proceeding without explicit driver")
-        
+            # Fallback to wildcard classpath
+            print("Using wildcard classpath for JDBC drivers")
+            builder = (builder
+                .config("spark.driver.extraClassPath", "/opt/spark/work/jdbc-drivers/*:/opt/airflow/sparkFiles/jdbc-drivers/*")
+                .config("spark.executor.extraClassPath", "/opt/spark/work/jdbc-drivers/*:/opt/airflow/sparkFiles/jdbc-drivers/*")
+            )
+
+        # Optional: bind UI and pick a fixed port (useful for docker port-mapping)
+        if spark_ui_port:
+            builder = builder.config("spark.ui.port", spark_ui_port)
+        if spark_ui_bind:
+            # For driver in containers; makes the UI listen on 0.0.0.0 instead of only localhost
+            builder = builder.config("spark.driver.bindAddress", spark_ui_bind)
+            builder = builder.config("spark.driver.host", spark_ui_bind)
+
         spark = builder.getOrCreate()
         
-        # Set log level to WARN to reduce verbosity
-        spark.sparkContext.setLogLevel("WARN")
-        
-        logger.info("Optimized Spark session created successfully")
+        # Print configuration for debugging
+        print("=" * 80)
+        print("Spark Session Configuration:")
+        print(f"  Master: {spark.sparkContext.master}")
+        print(f"  App Name: {spark.sparkContext.appName}")
+        print(f"  Spark Version: {spark.version}")
+        print(f"  Driver Memory: {spark.sparkContext.getConf().get('spark.driver.memory', 'default')}")
+        print(f"  Executor Memory: {spark.sparkContext.getConf().get('spark.executor.memory', 'default')}")
+        print(f"  Executor Cores: {spark.sparkContext.getConf().get('spark.executor.cores', 'default')}")
+        print(f"  Executor Instances: {spark.sparkContext.getConf().get('spark.executor.instances', 'dynamic')}")
+        print("=" * 80)
+
+        print("✓ Spark session created successfully")
         return spark
-        
     except Exception as e:
-        logger.error(f"Error creating optimized Spark session: {e}")
+        print(f"✗ Error creating Spark session: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 
-def get_connection_params_with_fallback():
-    """Get connection parameters with proper fallback logic"""
+
+def get_connection_params_fallback():
+    """Get PostgreSQL connection parameters with fallback logic"""
+    # Get connection parameters from Airflow connection
     try:
-        # Try to get from Airflow connection
-        from airflow.hooks.base import BaseHook
         connection = BaseHook.get_connection("pg-ssg")
         host = connection.host
         port = connection.port if connection.port else 5432
@@ -137,12 +186,12 @@ def get_connection_params_with_fallback():
         user = connection.login
         password = connection.password
         
-        logger.info(f"Using Airflow connection 'pg-ssg'")
+        logger.info(f"Using Airflow connection 'pg-ssg':")
         logger.info(f"  Host: {host}")
         logger.info(f"  Port: {port}")
         logger.info(f"  Database: {database}")
         logger.info(f"  User: {user}")
-        
+        logger.info(f"  Password length: {len(password) if password else 0}")
     except Exception as e:
         logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
         # Fallback to environment variables
@@ -150,14 +199,33 @@ def get_connection_params_with_fallback():
         port = os.getenv("POSTGRES_PORT", "5432")
         database = os.getenv("POSTGRES_DB", "ssg")
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")
+        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")  # Use correct password
         
         logger.info(f"Environment variables check:")
         logger.info(f"  POSTGRES_HOST: {os.getenv('POSTGRES_HOST', 'Not set')}")
         logger.info(f"  POSTGRES_PORT: {os.getenv('POSTGRES_PORT', 'Not set')}")
         logger.info(f"  POSTGRES_DB: {os.getenv('POSTGRES_DB', 'Not set')}")
         logger.info(f"  POSTGRES_USER: {os.getenv('POSTGRES_USER', 'Not set')}")
+        logger.info(f"  POSTGRES_PASSWORD: {'*' * len(os.getenv('POSTGRES_PASSWORD', '')) if os.getenv('POSTGRES_PASSWORD') else 'Not set'}")
         
+        logger.info(f"Using connection parameters:")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Port: {port}")
+        logger.info(f"  Database: {database}")
+        logger.info(f"  User: {user}")
+        logger.info(f"  Password length: {len(password) if password else 0}")
+    
+    logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
+        
+    # Connect to PostgreSQL
+    conn = psycopg2.connect(
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password
+    )
+
     return {
         "host": host,
         "port": port,
@@ -168,527 +236,470 @@ def get_connection_params_with_fallback():
     }
 
 
-def validate_data_quality(df) -> Dict[str, Any]:
+def check_for_recent_data(connection_params: dict = None, days: int = 3) -> int:
     """
-    Validate data quality and return quality report
+    Check if there's recent data in operator_daily_performance table to process.
     
     Args:
-        df: Spark DataFrame to validate
-        
+        connection_params: Database connection parameters (optional, will fetch if not provided)
+        days: Number of days to look back for recent data (default: 3)
+    
     Returns:
-        Dict containing quality metrics and validation results
+        int: Number of recent records found
     """
-    logger.info("Starting data quality validation...")
-    
     try:
-        # Basic statistics
-        total_records = df.count()
-        unique_lines = df.select("source_connection").distinct().count() if "source_connection" in df.columns else 0
+        # Get connection parameters if not provided
+        if not connection_params:
+            try:
+                from dags.db_utils import get_postgres_connection_params
+                connection_params = get_postgres_connection_params("pg-ssg")
+            except Exception as e:
+                print(f"Error getting connection params from db_utils: {e}")
+                connection_params = get_connection_params_fallback()
         
-        # Date range analysis
-        date_stats = None
-        if "created_at" in df.columns:
-            date_stats = df.agg(
-                spark_min("created_at").alias("min_date"),
-                spark_max("created_at").alias("max_date"),
-                count("created_at").alias("date_count")
-            ).collect()[0]
+        print(f"Checking for data from last {days} days in operator_daily_performance table...")
         
-        # Quality checks
-        issues = []
-        passed = True
-        
-        # Check for minimum record count
-        if total_records < 100:
-            issues.append(f"Low record count: {total_records}")
-            passed = False
-            
-        # Check for data freshness
-        if date_stats and date_stats["max_date"]:
-            from datetime import datetime
-            max_date = date_stats["max_date"]
-            if hasattr(max_date, 'replace'):
-                # Handle different timestamp types
-                if hasattr(max_date, 'tzinfo'):
-                    freshness_hours = (datetime.now(max_date.tzinfo) - max_date).total_seconds() / 3600
-                else:
-                    freshness_hours = (datetime.now() - max_date).total_seconds() / 3600
-                
-                if freshness_hours > 48:  # 48 hours
-                    issues.append(f"Data not fresh: {freshness_hours:.1f} hours old")
-                    # Don't fail on this, just warn
-            else:
-                issues.append("Could not determine data freshness")
-        
-        quality_report = {
-            "passed": passed,
-            "total_records": total_records,
-            "unique_lines": unique_lines,
-            "date_stats": {
-                "min_date": date_stats["min_date"] if date_stats else None,
-                "max_date": date_stats["max_date"] if date_stats else None
-            } if date_stats else None,
-            "issues": issues
-        }
-        
-        logger.info(f"Data quality report: {quality_report}")
-        return quality_report
-        
-    except Exception as e:
-        logger.error(f"Error in data quality validation: {e}")
-        return {
-            "passed": False,
-            "total_records": 0,
-            "unique_lines": 0,
-            "issues": [f"Validation error: {str(e)}"]
-        }
-
-
-def load_source_data(spark, jdbc_url: str, jdbc_properties: Dict[str, str], days_back: int = 1):
-    """
-    Load source data with proper error handling and optimization
-    
-    Args:
-        spark: SparkSession
-        jdbc_url: JDBC connection URL
-        jdbc_properties: JDBC properties
-        days_back: Number of days back to load data
-        
-    Returns:
-        Spark DataFrame with source data
-    """
-    logger.info(f"Loading source data for last {days_back} days...")
-    
-    try:
-        # Read data from postgres database
-        df = spark.read \
-            .format("jdbc") \
-            .option("url", jdbc_url) \
-            .option("dbtable", "operator_daily_performance") \
-            .option("user", jdbc_properties["user"]) \
-            .option("password", jdbc_properties["password"]) \
-            .option("driver", "org.postgresql.Driver") \
-            .option("fetchsize", "10000") \
-            .load()
-        
-        logger.info(f"Initial data load completed. Row count: {df.count()}")
-        
-        # Filter the data to only include records from the specified period
-        if "ODP_Date" in df.columns:
-            df_filtered = df.filter(df["ODP_Date"] >= date_sub(current_date(), days_back))
-            logger.info(f"Data filtered to last {days_back} days. Row count: {df_filtered.count()}")
-            return df_filtered
-        else:
-            logger.warning("ODP_Date column not found, returning all data")
-            return df
-            
-    except Exception as e:
-        logger.error(f"Error loading source data: {e}")
-        raise
-
-
-def perform_aggregations_optimized(df):
-    """
-    Perform optimized aggregations with proper error handling
-    
-    Args:
-        df: Source Spark DataFrame
-        
-    Returns:
-        Dict of aggregated DataFrames
-    """
-    logger.info("Performing optimized aggregations...")
-    
-    try:
-        # Check if DataFrame is empty
-        record_count = df.count()
-        if record_count == 0:
-            logger.info("No records to aggregate. Returning empty DataFrames.")
-            # Return empty DataFrames with proper schema
-            from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, DateType, BooleanType
-            from pyspark.sql import SparkSession
-            
-            # Create empty DataFrames with appropriate schemas
-            spark = SparkSession.builder.getOrCreate()
-            
-            # Schema for aggregation 1
-            schema1 = StructType([
-                StructField("ODP_Date", DateType(), True),
-                StructField("Shift", StringType(), True),
-                StructField("ODPD_ST_Key", IntegerType(), True),
-                StructField("ST_ID", StringType(), True),
-                StructField("ST_Description", StringType(), True),
-                StructField("ODPD_Lot_Number", StringType(), True),
-                StructField("ODPD_OC_Key", StringType(), True),
-                StructField("OC_Description", StringType(), True),
-                StructField("OC_Standard_Time", DoubleType(), True),  # assuming numeric
-                StructField("ODPD_Actual_Time", DoubleType(), True),   # assuming numeric
-                StructField("ODPD_CM_Key", StringType(), True),
-                StructField("CM_Description", StringType(), True),
-                StructField("ODPD_SM_Key", IntegerType(), True),
-                StructField("SM_Description", StringType(), True),
-                StructField("source_connection", StringType(), True),
-                # Aggregated fields
-                StructField("ODPD_Quantity", DoubleType(), True),
-                StructField("Loading_Qty", DoubleType(), True),
-                StructField("UnLoading_Qty", DoubleType(), True),
-                StructField("record_count", IntegerType(), True)
-            ])
-            aggregated_df1 = spark.createDataFrame([], schema1)
-            
-            # Schema for aggregation 2
-            schema2 = StructType([
-                # Grouping columns (dimensions)
-                StructField("ODP_Date", DateType(), True),
-                StructField("Shift", StringType(), True),
-                StructField("ODPD_ST_Key", IntegerType(), True),
-                StructField("ST_ID", StringType(50), True),
-                StructField("ST_Description", StringType(100), True),
-                StructField("ODPD_Lot_Number", StringType(50), True),
-                StructField("ODPD_OC_Key", IntegerType(), True),
-                StructField("OC_Description", StringType(100), True),
-                StructField("OC_Standard_Time", DoubleType(), True),  # Numeric(10,2) → DoubleType
-                StructField("ODPD_Actual_Time", DoubleType(), True),   # Numeric(10,2) → DoubleType
-                StructField("ODPD_CM_Key", IntegerType(), True),
-                StructField("CM_Description", StringType(100), True),
-                StructField("ODPD_SM_Key", IntegerType(), True),
-                StructField("SM_Description", StringType(100), True),
-                StructField("ODPD_Is_Overtime", BooleanType(), True),
-                StructField("ODPD_Overtime_Factor", DoubleType(), True),
-                StructField("ODPD_STPO_Key", IntegerType(), True),
-                StructField("source_connection", StringType(50), True),
-                # Aggregated measures
-                StructField("ODPD_Quantity", IntegerType(), True),     # sum → still integer if input was
-                StructField("Loading_Qty", IntegerType(), True),
-                StructField("UnLoading_Qty", IntegerType(), True),
-                StructField("record_count", IntegerType(), True)       # count → always integer
-            ])
-            aggregated_df2 = spark.createDataFrame([], schema2)
-            
-
-            # Schema for aggregation 3
-            schema3 = StructType([
-                # Grouping Dimensions
-                StructField("ODP_Date", DateType(), True),
-                StructField("Shift", StringType(), True),
-                StructField("ODP_EM_Key", IntegerType(), True),
-                StructField("EM_RFID", StringType(), True),
-                StructField("EM_Department", StringType(), True),
-                StructField("EM_FirstName", StringType(), True),
-                StructField("EM_LastName", StringType(), True),
-                StructField("ODP_Current_Station", StringType(), True),
-                StructField("ODPD_Workstation", StringType(), True),
-                StructField("ODPD_WC_Key", IntegerType(), True),
-                StructField("ODPD_ST_Key", IntegerType(), True),
-                StructField("ST_ID", StringType(), True),
-                StructField("ST_Description", StringType(), True),
-                StructField("ODPD_Lot_Number", StringType(), True),
-                StructField("ODPD_OC_Key", IntegerType(), True),
-                StructField("OC_Description", StringType(), True),
-                StructField("ODPD_CM_Key", IntegerType(), True),
-                StructField("CM_Description", StringType(), True),
-                StructField("ODPD_SM_Key", IntegerType(), True),
-                StructField("SM_Description", StringType(), True),
-                StructField("source_connection", StringType(), True),
-                # Aggregated Measures
-                StructField("ODPD_Quantity", IntegerType(), True),
-                StructField("Loading_Qty", IntegerType(), True),
-                StructField("UnLoading_Qty", IntegerType(), True),
-                StructField("OC_Standard_Time", DoubleType(), True),      # avg → Double
-                StructField("ODPD_Actual_Time", DoubleType(), True),      # avg → Double
-                StructField("ODPD_Is_Overtime", BooleanType(), True),     # max → Boolean
-                StructField("ODPD_Overtime_Factor", DoubleType(), True),  # avg → Double
-                StructField("record_count", IntegerType(), True),
-                # Time aggregations (optional)
-                StructField("first_clock_in", TimestampType(), True),
-                StructField("last_clock_out", TimestampType(), True)
-            ])
-            aggregated_df3 = spark.createDataFrame([], schema3)
-
-
-
-            agg_results = {
-                'odp_date_oc': aggregated_df1,
-                'odp_date_shift': aggregated_df2,
-                'odp_date_employee': aggregated_df3
-            }
-            
-            for name, agg_df in agg_results.items():
-                logger.info(f"Aggregation {name} completed with 0 records")
-            
-            return agg_results
-        
-        # Cache the DataFrame for multiple operations
-        df.cache()
-        logger.info("Source DataFrame cached for performance")
-        
-        # Transform 1: Group by ODP_Date and OC_Description, sum ODPD_Quantity
-        logger.info("Performing aggregation 1: by Date and Operation Code...")
-        aggregated_df1 = df.groupBy(
-            "ODP_Date", "Shift", "ODPD_ST_Key", "ST_ID", "ST_Description",
-            "ODPD_Lot_Number", "ODPD_OC_Key", "OC_Description",
-            "OC_Standard_Time", "ODPD_Actual_Time", "ODPD_CM_Key",
-            "CM_Description", "ODPD_SM_Key", "SM_Description", "source_connection"
-        ).agg(
-            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
-            F.sum("Loading_Qty").alias("Loading_Qty"),
-            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
-            F.count("*").alias("record_count")
+        # Connect to PostgreSQL
+        conn = psycopg2.connect(
+            host=connection_params.get("host"),
+            port=connection_params.get("port", "5432"),
+            database=connection_params.get("database"),
+            user=connection_params.get("user"),
+            password=connection_params.get("password")
         )
         
-        # Transform 2: Group by ODP_Date and Shift, sum ODPD_Quantity
-        logger.info("Performing aggregation 3: by Date and Employee...")        
-        # Group by descriptive/dimensional columns
-        grouping_columns_db2 = [
-            "ODP_Date", "Shift", "ODPD_ST_Key", "ST_ID", "ST_Description",
-            "ODPD_Lot_Number", "ODPD_OC_Key", "OC_Description",
-            "OC_Standard_Time", "ODPD_Actual_Time", "ODPD_CM_Key",
-            "CM_Description", "ODPD_SM_Key", "SM_Description","ODPD_STPO_Key", "source_connection"
-        ]
-
-        # Aggregate additive measures
-        aggregated_df2 = df.groupBy(*grouping_columns_db2).agg(
-            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
-            F.sum("Loading_Qty").alias("Loading_Qty"),
-            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
-            F.avg("ODPD_Overtime_Factor").alias("ODPD_Overtime_Factor"),
-            F.max("ODPD_Is_Overtime").alias("ODPD_Is_Overtime"),  # e.g., if any row had overtime
-            F.count("*").alias("record_count")  # optional: track number of original rows
-        )
-        # Transform 3: Group by ODP_Date and Employee, sum ODPD_Quantity
-        logger.info("Performing aggregation 3: by Date and Employee...")
-        grouping_cols = [
-            "ODP_Date", "Shift",
-            "ODP_EM_Key", "EM_RFID", "EM_Department", "EM_FirstName", "EM_LastName",
-            "ODP_Current_Station", "ODPD_Workstation", "ODPD_WC_Key",
-            "ODPD_ST_Key", "ST_ID", "ST_Description", "ODPD_Lot_Number",
-            "ODPD_OC_Key", "OC_Description","OC_Standard_Time",
-            "ODPD_CM_Key", "CM_Description", "ODPD_SM_Key", "SM_Description",
-            "source_connection"
-        ]        
-
-        # Optional: Also aggregate time fields (min clock-in, max clock-out)
-        aggregated_df3 = df.groupBy(*grouping_cols).agg(
-            # Sum production quantities
-            F.sum("ODPD_Quantity").alias("ODPD_Quantity"),
-            F.sum("Loading_Qty").alias("Loading_Qty"),
-            F.sum("UnLoading_Qty").alias("UnLoading_Qty"),
-            F.sum("ODPD_Actual_Time").alias("ODPD_Actual_Time"),
-            # Overtime flags — take MAX (if any record had overtime)
-            F.max("ODPD_Is_Overtime").alias("ODPD_Is_Overtime"),
-            F.avg("ODPD_Overtime_Factor").alias("ODPD_Overtime_Factor"),
-            # Track number of records aggregated
-            F.count("*").alias("record_count"),
-            # Optional: capture time range
-            F.min("ODP_Actual_Clock_In").alias("first_clock_in"),
-            F.max("ODP_Actual_Clock_Out").alias("last_clock_out")
-        )
-
-
-        # Validate aggregation results
-        agg_results = {
-            'odp_date_oc': aggregated_df1,
-            'odp_date_shift': aggregated_df2,
-            'odp_date_employee': aggregated_df3
-        }
+        cursor = conn.cursor()
         
-        for name, agg_df in agg_results.items():
-            record_count = agg_df.count()
-            logger.info(f"Aggregation {name} completed with {record_count} records")
-            
-        # Uncache the source DataFrame
-        df.unpersist()
-        logger.info("Source DataFrame uncached")
+        # Check if there's recent data
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM operator_daily_performance 
+            WHERE created_at >= CURRENT_DATE - INTERVAL '{days} days'
+        """)
+        count = cursor.fetchone()[0]
         
-        return agg_results
+        cursor.close()
+        conn.close()
+        
+        print(f"✓ Found {count} recent records in operator_daily_performance table")
+        return count
         
     except Exception as e:
-        logger.error(f"Error in aggregations: {e}")
-        raise
+        print(f"✗ Error checking for recent data: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
 
 
-def save_with_upsert_enhanced(df, table_name: str, jdbc_url: str, jdbc_properties: Dict[str, str]):
-    """
-    Save DataFrame with enhanced upsert logic
-    
-    Args:
-        df: DataFrame to save
-        table_name: Target table name
-        jdbc_url: JDBC URL
-        jdbc_properties: JDBC properties
-    """
-    record_count = df.count()
-    logger.info(f"Saving data to table: {table_name}")
-    logger.info(f"DataFrame row count: {record_count}")
-    
-    # Handle empty DataFrames
-    if record_count == 0:
-        logger.info(f"No records to save to {table_name}. Skipping save operation.")
-        return
-    
+
+
+
+
+def transform_data(spark):
+    """Transform data to create aggregated tables"""
     try:
-        # Add ETL metadata
-        df_with_metadata = df.withColumn("etl_processed_at", current_timestamp()) \
-                           .withColumn("etl_batch_id", lit(f"batch_{int(time.time())}"))
+        print("Starting data transformation...")
+        # Get database connection parameters for PostgreSQL (target)
+        print("Getting PostgreSQL connection parameters...")
         
-        # For this implementation, we'll use append mode with proper transaction handling
-        # In a production environment, you would implement proper upsert logic
-        df_with_metadata.write \
-            .format("jdbc") \
-            .option("url", jdbc_url) \
-            .option("dbtable", table_name) \
-            .option("user", jdbc_properties["user"]) \
-            .option("password", jdbc_properties["password"]) \
-            .option("driver", "org.postgresql.Driver") \
-            .option("batchsize", "10000") \
-            .mode("append") \
-            .save()
-        
-        logger.info(f"Data successfully saved to {table_name}")
-        
-    except Exception as e:
-        logger.error(f"Error saving data to {table_name}: {e}")
-        raise
-
-
-def log_etl_metrics(start_time: float, records_processed: int, tables_updated: list):
-    """
-    Log comprehensive ETL metrics
-    
-    Args:
-        start_time: ETL process start time
-        records_processed: Number of records processed
-        tables_updated: List of tables updated
-    """
-    end_time = time.time()
-    duration = end_time - start_time
-    
-    metrics = {
-        'execution_time_seconds': round(duration, 2),
-        'records_processed': records_processed,
-        'tables_updated': tables_updated,
-        'throughput_rps': round(records_processed / duration, 2) if duration > 0 else 0,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    logger.info(f"ETL Metrics: {metrics}")
-
-
-def transform_data_optimized(spark):
-    """
-    Optimized data transformation with ETL best practices
-    
-    Args:
-        spark: SparkSession
-        
-    Returns:
-        bool: Success status
-    """
-    start_time = time.time()
-    logger.info("Starting optimized data transformation...")
-    
-    try:
-        # Initialize configuration
-        config = ETLConfig()
-        config.validate()
-        logger.info("Configuration validated successfully")
-        
-        # Get database connection parameters
-        logger.info("Getting PostgreSQL connection parameters...")
+        # Use db_utils.py to get connection parameters with fallback
         try:
             postgres_connection_params = get_postgres_connection_params("pg-ssg")
-            
         except Exception as e:
-            logger.warning(f"Error getting connection params from db_utils: {e}")
-            logger.info("Using fallback method with environment variables...")
-            postgres_connection_params = get_connection_params_with_fallback()
+            print(f"Error getting connection params from db_utils: {e}")
+            print("Using fallback method with environment variables...")
+            postgres_connection_params = get_connection_params_fallback()
             
         postgres_jdbc_properties = get_postgres_jdbc_properties(postgres_connection_params)
         postgres_jdbc_url = postgres_connection_params["jdbc_url"]
         
-        # Print connection details
-        logger.info(f"PostgreSQL Host: {postgres_connection_params['host']}")
-        logger.info(f"PostgreSQL Port: {postgres_connection_params['port']}")
-        logger.info(f"PostgreSQL Database: {postgres_connection_params['database']}")
-        logger.info(f"PostgreSQL User: {postgres_connection_params['user']}")
-        logger.info(f"PostgreSQL JDBC URL: {postgres_jdbc_url}")
+        # Print connection details (without password for security)
+        print(f"PostgreSQL Host: {postgres_connection_params['host']}")
+        print(f"PostgreSQL Port: {postgres_connection_params['port']}")
+        print(f"PostgreSQL Database: {postgres_connection_params['database']}")
+        print(f"PostgreSQL User: {postgres_connection_params['user']}")
+        print(f"PostgreSQL JDBC URL: {postgres_jdbc_url}")
         
-        # Load source data
-        df = load_source_data(spark, postgres_jdbc_url, postgres_jdbc_properties, days_back=1)
+        # Debug: Print Spark configuration
+        print("Spark configuration:")
+        for item in spark.sparkContext.getConf().getAll():
+            print(f"  {item[0]}: {item[1]}")
         
-        # Validate data quality
-        quality_report = validate_data_quality(df)
-        if not quality_report['passed']:
-            logger.warning(f"Data quality issues detected: {quality_report['issues']}")
-            # For critical issues, you might want to stop processing
-            # For now, we'll continue but log the warnings
+        # Read data from postgres database with optimized settings
+        # Using reduced parallelism (2 partitions) to avoid EOFException errors
+        print("Reading data from PostgreSQL...")
+        
+        df = None
+        row_count = 0
+        
+        # Define the query
+        query = """
+           (SELECT odp_date, oc_description, shift, odp_em_key, em_firstname,
+                odpd_quantity, source_connection
+            FROM operator_daily_performance
+            WHERE odp_date >= CURRENT_DATE - INTERVAL '15 days') t
+        """
+        
+        # Try parallel read first (with reduced partitions)
+        try:
+            # Calculate date range for partitioning
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            lower_bound = (today - timedelta(days=15)).strftime('%Y-%m-%d')
+            upper_bound = today.strftime('%Y-%m-%d')
             
-        # Check if we have any records before proceeding
-        record_count = df.count()
-        if record_count == 0:
-            logger.info("No records to process. Skipping aggregation and save steps.")
-            # Log ETL metrics with 0 records
-            log_etl_metrics(start_time, 0, [])
-            logger.info("Optimized data transformation completed successfully (no data to process)")
-            return True
-        
-        # Perform aggregations
-        aggregated_dfs = perform_aggregations_optimized(df)
-        
-        # Save results with enhanced logic
-        tables_updated = []
-        total_records_saved = 0
-        
-        for table_name, agg_df in aggregated_dfs.items():
+            print(f"Attempting parallel read with 2 partitions (date range: {lower_bound} to {upper_bound})...")
+
+            # Reduced from 4 to 2 partitions to avoid connection issues
+            df = spark.read \
+                .format("jdbc") \
+                .option("url", postgres_jdbc_url) \
+                .option("dbtable", query) \
+                .option("user", postgres_jdbc_properties["user"]) \
+                .option("password", postgres_jdbc_properties["password"]) \
+                .option("driver", "org.postgresql.Driver") \
+                .option("numPartitions", "2") \
+                .option("fetchsize", "10000") \
+                .option("partitionColumn", "odp_date") \
+                .option("lowerBound", lower_bound) \
+                .option("upperBound", upper_bound) \
+                .load()
+
+            # Persist and count - this is where EOFException might occur
+            df = df.persist(StorageLevel.MEMORY_AND_DISK)
+            row_count = df.count()
+            
+            print(f"✓ Data loaded successfully with parallel partitioning (2 partitions). Row count: {row_count}")
+            
+        except Exception as parallel_error:
+            print(f"⚠ Parallel read failed: {parallel_error}")
+            print("Falling back to single-connection read...")
+            
+            # Fallback: Simple read without partitioning
             try:
-                record_count = agg_df.count()
-                total_records_saved += record_count
-                save_with_upsert_enhanced(agg_df, table_name, postgres_jdbc_url, postgres_jdbc_properties)
-                tables_updated.append(table_name)
-                logger.info(f"Successfully saved {record_count} records to {table_name}")
+                df = spark.read \
+                    .format("jdbc") \
+                    .option("url", postgres_jdbc_url) \
+                    .option("dbtable", query) \
+                    .option("user", postgres_jdbc_properties["user"]) \
+                    .option("password", postgres_jdbc_properties["password"]) \
+                    .option("driver", "org.postgresql.Driver") \
+                    .option("fetchsize", "10000") \
+                    .load()
+                
+                df = df.persist(StorageLevel.MEMORY_AND_DISK)
+                row_count = df.count()
+                
+                print(f"✓ Data loaded successfully with single connection. Row count: {row_count}")
+                
+            except Exception as simple_error:
+                print(f"✗ Simple read also failed: {simple_error}")
+                print("Attempting final fallback without explicit driver...")
+                
+                # Final fallback: Let Spark determine the driver
+                try:
+                    df = spark.read \
+                        .format("jdbc") \
+                        .option("url", postgres_jdbc_url) \
+                        .option("dbtable", query) \
+                        .option("user", postgres_jdbc_properties["user"]) \
+                        .option("password", postgres_jdbc_properties["password"]) \
+                        .option("fetchsize", "10000") \
+                        .load()
+                    
+                    df = df.persist(StorageLevel.MEMORY_AND_DISK)
+                    row_count = df.count()
+                    
+                    print(f"✓ Data loaded with auto-driver detection. Row count: {row_count}")
+                    
+                except Exception as final_error:
+                    print(f"✗ All read attempts failed: {final_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return {
+                        "success": False,
+                        "data_loaded": 0,
+                        "data_filtered": 0,
+                        "tables_processed": [],
+                        "message": f"Failed to read data from PostgreSQL: {str(final_error)}"
+                    }
+        
+        # Dynamic shuffle partition calculation based on data size
+        if row_count > 0:
+            optimal_partitions = max(50, min(200, row_count // 10000))
+            spark.conf.set("spark.sql.shuffle.partitions", str(optimal_partitions))
+            print(f"✓ Adjusted shuffle partitions to {optimal_partitions} based on data size ({row_count:,} rows)")
+        
+        # Check if table exists and has data (row_count already computed in the primary read path)
+        # If we ended up in fallback read path, compute it once here.
+        if 'row_count' not in locals():
+            try:
+                df = df.persist(StorageLevel.MEMORY_AND_DISK)
+                row_count = df.count()
             except Exception as e:
-                logger.error(f"Failed to save data to {table_name}: {e}")
-                # Continue with other tables but mark as partial failure
-                continue
-        
-        # Log ETL metrics
-        log_etl_metrics(start_time, total_records_saved, tables_updated)
-        
-        logger.info("Optimized data transformation completed successfully")
-        return True
+                print(f"Error counting rows: {str(e)}")
+                row_count = 0
+            
+        if row_count == 0:
+            print("Warning: No data found in operator_daily_performance table for the last day")
+            return True
+            
+        # Process data using TARGETS configuration
+        print("Processing data using TARGETS configuration...")
+        tables_processed = []
+        try:
+            for cfg in TARGETS:
+                print(f"Processing target table: {cfg['table']}")
+
+                # Filter out records with null em_firstname for odp_date_employee table
+                # since em_firstname is part of the primary key and cannot be null
+                if cfg["table"] == "odp_date_oc":
+                    # Avoid double count() on large DataFrames; compute only if you need the metric.
+                    filtered_df = df.filter(df["em_firstname"].isNotNull() )
+                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
+                        filtered_count = filtered_df.count()
+                        print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
+                    df_to_process = filtered_df
+                if cfg["table"] == "odp_date_employee":
+                    # Avoid double count() on large DataFrames; compute only if you need the metric.
+                    filtered_df = df.filter(df["oc_description"].isNotNull())
+                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
+                        filtered_count = filtered_df.count()
+                        print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
+                    df_to_process = filtered_df
+
+                else:
+                    df_to_process = df
+
+                # Create aggregated dataframe based on group columns
+                agg_df = df_to_process.groupBy(*cfg["group"]) \
+                          .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
+
+                # Counting triggers a full Spark job. Make it optional (only for debugging/metrics).
+                record_count = None
+                if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
+                    try:
+                        record_count = agg_df.count()
+                    except Exception as e:
+                        print(f"Error counting records for {cfg['table']}: {str(e)}")
+                        record_count = 0
+
+                # Perform upsert for this target
+                success = upsert_data_via_spark(
+                    spark=spark,
+                    data_df=agg_df,
+                    table_name=cfg["table"],
+                    key_columns=cfg["pk"],
+                    connection_params=postgres_connection_params
+                )
+
+                if not success:
+                    print(f"Failed to upsert data to {cfg['table']}")
+                    return {
+                        "success": False,
+                        "data_loaded": row_count,
+                        "data_filtered": row_count,
+                        "tables_processed": tables_processed,
+                        "message": f"Failed to upsert data to {cfg['table']}"
+                    }
+
+                tables_processed.append({
+                    "table": cfg["table"],
+                    "records": record_count if record_count is not None else "(count disabled)"
+                })
+
+                if record_count is not None:
+                    print(f"Successfully upserted {record_count} records to {cfg['table']} table")
+                else:
+                    print(f"Successfully upserted records to {cfg['table']} table (count disabled)")
+
+        except Exception as e:
+            print(f"Error processing data with TARGETS: {str(e)}")
+            return {
+                "success": False,
+                "data_loaded": row_count,
+                "data_filtered": row_count,
+                "tables_processed": tables_processed,
+                "message": f"Error processing data: {str(e)}"
+            }
+
+        return {
+            "success": True,
+            "data_loaded": row_count,
+            "data_filtered": row_count,
+            "tables_processed": tables_processed,
+            "message": "Data transformation completed successfully"
+        }
         
     except Exception as e:
-        logger.error(f"Error in optimized data transformation: {e}")
+        print(f"Error in data transformation: {str(e)}")
         import traceback
         traceback.print_exc()
+        # Instead of failing completely, let's return False to indicate partial success
         return False
     finally:
         try:
-            # Stop Spark session
-            if spark:
-                spark.stop()
-                logger.info("Spark session stopped")
+            # Unpersist if we cached the main df
+            if 'df' in locals():
+                try:
+                    df.unpersist(blocking=False)
+                except Exception:
+                    pass
+
+            spark.stop()
+            print("Spark session stopped")
+        except:
+            pass
+
+
+def upsert_data_via_spark(
+    spark: SparkSession,
+    data_df,
+    table_name: str,
+    key_columns: list,
+    connection_params: dict = None
+) -> bool:
+    """
+    Perform upsert operation on PostgreSQL table using Spark with staging table approach.
+
+    Args:
+        spark: SparkSession instance
+        data_df: DataFrame containing the data to upsert
+        table_name: Name of the target table
+        key_columns: List of column names that form the primary key
+        connection_params: Database connection parameters (optional)
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        if data_df is None or data_df.rdd.isEmpty():
+            print("No data to upsert")
+            return True
+
+        # Get connection parameters if not provided
+        if not connection_params:
+            try:
+                from dags.db_utils import get_postgres_connection_params
+                connection_params = get_postgres_connection_params("pg-ssg")
+            except Exception as e:
+                print(f"Error getting connection params: {e}")
+                return False
+
+        # Import psycopg2 here since it's needed for the function
+        import psycopg2
+        import uuid
+
+        jdbc_properties = get_postgres_jdbc_properties(connection_params)
+        jdbc_url = connection_params["jdbc_url"]
+
+        # Generate a unique staging table name
+        staging_table = f"{table_name}_staging_{str(uuid.uuid4()).replace('-', '_')}"
+
+        try:
+            # Create staging table with same structure as target table
+            # First, we need to connect directly to PostgreSQL to execute DDL statements
+            conn = psycopg2.connect(
+                host=connection_params.get("host"),
+                port=connection_params.get("port", "5432"),
+                database=connection_params.get("database"),
+                user=connection_params.get("user"),
+                password=connection_params.get("password")
+            )
+            cursor = conn.cursor()
+
+            # Drop staging table if exists
+            cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
+
+            # Create staging table with same structure as target table
+            cursor.execute(f"CREATE TABLE {staging_table} (LIKE {table_name} INCLUDING ALL);")
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            # Write data to staging table using Spark
+            data_df.write \
+                .format("jdbc") \
+                .option("url", jdbc_url) \
+                .option("dbtable", staging_table) \
+                .option("user", jdbc_properties["user"]) \
+                .option("password", jdbc_properties["password"]) \
+                .option("driver", "org.postgresql.Driver") \
+                .mode("append") \
+                .save()
+
+            # Now perform upsert using ON CONFLICT
+            conn = psycopg2.connect(
+                host=connection_params.get("host"),
+                port=connection_params.get("port", "5432"),
+                database=connection_params.get("database"),
+                user=connection_params.get("user"),
+                password=connection_params.get("password")
+            )
+            cursor = conn.cursor()
+
+            # Get all column names from the DataFrame
+            columns = data_df.columns
+            all_columns_str = ", ".join(columns)
+
+            # Create the SET clause for UPDATE (excluding key columns)
+            set_columns = [col for col in columns if col not in key_columns]
+            set_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in set_columns])
+
+            # Create key columns string for ON CONFLICT clause
+            key_columns_str = ", ".join(key_columns)
+
+            # UPSERT SQL statement
+            upsert_sql = f"""
+            INSERT INTO {table_name} ({all_columns_str})
+            SELECT {all_columns_str} FROM {staging_table}
+            ON CONFLICT ({key_columns_str})
+            DO UPDATE SET {set_clause};
+            """
+
+            # Execute upsert
+            cursor.execute(upsert_sql)
+            conn.commit()
+
+            # Clean up staging table
+            cursor.execute(f"DROP TABLE {staging_table};")
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            print(f"Data successfully upserted to {table_name}")
+            return True
+
         except Exception as e:
-            logger.error(f"Error stopping Spark session: {e}")
+            print(f"Error during upsert operation: {str(e)}")
+            # Try to clean up staging table if it exists
+            try:
+                conn = psycopg2.connect(
+                    host=connection_params.get("host"),
+                    port=connection_params.get("port", "5432"),
+                    database=connection_params.get("database"),
+                    user=connection_params.get("user"),
+                    password=connection_params.get("password")
+                )
+                cursor = conn.cursor()
+                cursor.execute(f"DROP TABLE IF EXISTS {staging_table};")
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except:
+                pass
+            raise
 
-
-def create_spark_session():
-    """
-    Backward compatibility function - creates optimized Spark session
-    """
-    config = ETLConfig()
-    return create_spark_session_optimized(config)
-
-
-def transform_data(spark):
-    """
-    Backward compatibility function - calls optimized transformation
-    """
-    return transform_data_optimized(spark)
+    except Exception as e:
+        print(f"Error in upsert_data_via_spark: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 if __name__ == "__main__":
-    print("Starting optimized Spark ETL process...")
+    print("Starting Spark ETL process...")
     spark = None
     try:
         spark = create_spark_session()

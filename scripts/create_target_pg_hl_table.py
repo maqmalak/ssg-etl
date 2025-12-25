@@ -36,6 +36,7 @@ class HangerLaneData(Base):
     st_description = Column(String(100))
     odpd_lot_number = Column(String(50))
     odpd_oc_key = Column(Integer)
+    oc_ob_id = Column(String(5))   
     oc_description = Column(String(100))
     loading_qty = Column(Integer)
     unloading_qty = Column(Integer)
@@ -60,7 +61,8 @@ class HangerLaneData(Base):
     odpd_stpo_key = Column(Integer)
     created_at = Column(DateTime)
     source_connection = Column(String(50))
-
+    fg_item_key = Column(String(50))
+    odp_efficency = Column(Float)
     __table_args__ = (
         Index('idx_odp_date', 'odp_date'),
         Index('idx_created_at', 'created_at'),

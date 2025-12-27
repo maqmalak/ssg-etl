@@ -12,6 +12,11 @@ from pendulum import timezone
 from datetime import datetime, timedelta
 
 from airflow.hooks.base import BaseHook
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import insert
+
+
 # Add the dags directory to the Python path so we can import db_utils
 dags_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dags')
 # sys.path.append(os.path.abspath(dags_path))
@@ -28,7 +33,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 TARGETS = [
-    {"table": "operator_daily_performance","group": ["odp_date", "oc_description", "source_connection"], "pk": ["odp_key"]},
+    {"table": "operator_daily_performance","pk": ["source_connection","odp_key","odpd_key"]},
 ]
 
 print(f"Python path: {sys.path}")
@@ -57,6 +62,91 @@ except ImportError as e:
     sys.exit(1)
 
 
+# ---------------- DB INA-7A SOURCE CONNECTIONS ---------------- #
+def get_postgres_source_connection():
+    """
+    Get connection parameters for INA-7A source database.
+    Returns a dictionary with connection details for JDBC and direct connections.
+    """
+    # Get connection parameters from Airflow connection
+    try:
+        connection = BaseHook.get_connection("INA-7A")
+        host = connection.host
+        port = connection.port if connection.port else 5433
+        database = connection.schema
+        user = connection.login
+        password = connection.password
+        
+        logger.info(f"Using Airflow connection 'INA-7A':")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Port: {port}")
+        logger.info(f"  Database: {database}")
+        logger.info(f"  User: {user}")
+        logger.info(f"  Password length: {len(password) if password else 0}")
+    except Exception as e:
+        logger.warning(f"Could not get Airflow connection 'INA-7A', using environment variables: {e}")
+        # Fallback to environment variables
+        host = os.getenv("INA_7A_HOST", "localhost")
+        port = int(os.getenv("INA_7A_PORT", "5433"))
+        database = os.getenv("INA_7A_DATABASE", "postgres")
+        user = os.getenv("INA_7A_USER", "postgres")
+        password = os.getenv("INA_7A_PASSWORD", "")
+    
+    logger.info(f"Source connection - PostgreSQL database: {database} on {host}:{port} as user {user}")
+
+    return {
+        "host": host,
+        "port": port,
+        "database": database,
+        "user": user,
+        "password": password,
+        "jdbc_url": f"jdbc:postgresql://{host}:{port}/{database}"
+    }
+
+
+# ---------------- DB pg-ssg TARGET CONNECTIONS ---------------- #
+def get_target_postgres_connection():
+    """
+    Get connection parameters for pg-ssg target database.
+    Returns a dictionary with connection details for JDBC and direct connections.
+    """
+    # Get connection parameters from Airflow connection
+    try:
+        connection = BaseHook.get_connection("pg-ssg")
+        host = connection.host
+        port = connection.port if connection.port else 5432
+        database = connection.schema
+        user = connection.login
+        password = connection.password
+        
+        logger.info(f"Using Airflow connection 'pg-ssg':")
+        logger.info(f"  Host: {host}")
+        logger.info(f"  Port: {port}")
+        logger.info(f"  Database: {database}")
+        logger.info(f"  User: {user}")
+        logger.info(f"  Password length: {len(password) if password else 0}")
+    except Exception as e:
+        logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
+        # Fallback to environment variables
+        host = os.getenv("TARGET_PG_HOST", "172.16.7.6")
+        port = int(os.getenv("TARGET_PG_PORT", "5432"))
+        database = os.getenv("TARGET_PG_DATABASE", "ssg")
+        user = os.getenv("TARGET_PG_USER", "postgres")
+        password = os.getenv("TARGET_PG_PASSWORD", "")
+    
+    logger.info(f"Target connection - PostgreSQL database: {database} on {host}:{port} as user {user}")
+
+    return {
+        "host": host,
+        "port": port,
+        "database": database,
+        "user": user,
+        "password": password,
+        "jdbc_url": f"jdbc:postgresql://{host}:{port}/{database}"
+    }
+
+
+
 def create_spark_session():
     """Create and configure Spark session with optimized settings"""
     print("Creating Spark session...")
@@ -70,8 +160,9 @@ def create_spark_session():
         
         # Use local mode for stability (avoids executor communication issues)
         # For cluster mode, set SPARK_MASTER_URL environment variable
+        # local[8] uses 8 threads for better parallelism with JDBC workloads
 
-        spark_master = os.getenv("SPARK_MASTER_URL", "local[4]")
+        spark_master = os.getenv("SPARK_MASTER_URL", "local[8]")
         print(f"Spark mode: {spark_master}")
 
 
@@ -106,7 +197,7 @@ def create_spark_session():
         # Build Spark session with optimized resource allocation
         builder = (
             SparkSession.builder
-            .appName("HangerLaneDataTransformation")
+            .appName("INA-7A-DataTransformation")
             .master(spark_master)  # ← Explicitly connect to Spark cluster
             
             # Adaptive Query Execution for better performance
@@ -189,114 +280,54 @@ def create_spark_session():
         traceback.print_exc()
         raise
 
-
-
-def get_connection_params_fallback():
-    """Get PostgreSQL connection parameters with fallback logic"""
-    # Get connection parameters from Airflow connection
-    try:
-        connection = BaseHook.get_connection("pg-ssg")
-        host = connection.host
-        port = connection.port if connection.port else 5432
-        database = connection.schema
-        user = connection.login
-        password = connection.password
-        
-        logger.info(f"Using Airflow connection 'pg-ssg':")
-        logger.info(f"  Host: {host}")
-        logger.info(f"  Port: {port}")
-        logger.info(f"  Database: {database}")
-        logger.info(f"  User: {user}")
-        logger.info(f"  Password length: {len(password) if password else 0}")
-    except Exception as e:
-        logger.warning(f"Could not get Airflow connection 'pg-ssg', using environment variables: {e}")
-        # Fallback to environment variables
-        host = os.getenv("POSTGRES_HOST", "172.16.7.6")
-        port = os.getenv("POSTGRES_PORT", "5432")
-        database = os.getenv("POSTGRES_DB", "ssg")
-        user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "P@kistan12")  # Use correct password
-        
-        logger.info(f"Environment variables check:")
-        logger.info(f"  POSTGRES_HOST: {os.getenv('POSTGRES_HOST', 'Not set')}")
-        logger.info(f"  POSTGRES_PORT: {os.getenv('POSTGRES_PORT', 'Not set')}")
-        logger.info(f"  POSTGRES_DB: {os.getenv('POSTGRES_DB', 'Not set')}")
-        logger.info(f"  POSTGRES_USER: {os.getenv('POSTGRES_USER', 'Not set')}")
-        logger.info(f"  POSTGRES_PASSWORD: {'*' * len(os.getenv('POSTGRES_PASSWORD', '')) if os.getenv('POSTGRES_PASSWORD') else 'Not set'}")
-        
-        logger.info(f"Using connection parameters:")
-        logger.info(f"  Host: {host}")
-        logger.info(f"  Port: {port}")
-        logger.info(f"  Database: {database}")
-        logger.info(f"  User: {user}")
-        logger.info(f"  Password length: {len(password) if password else 0}")
-    
-    logger.info(f"Connecting to PostgreSQL database: {database} on {host}:{port} as user {user}")
-        
-    # Connect to PostgreSQL
-    conn = psycopg2.connect(
-        host=host,
-        port=port,
-        database=database,
-        user=user,
-        password=password
-    )
-
-    return {
-        "host": host,
-        "port": port,
-        "database": database,
-        "user": user,
-        "password": password,
-        "jdbc_url": f"jdbc:postgresql://{host}:{port}/{database}"
-    }
-
-
-def check_for_recent_data(connection_params: dict = None, days: int = 3) -> int:
+def check_for_recent_data(spark: SparkSession = None, days: int = 30) -> int:
     """
-    Check if there's recent data in operator_daily_performance table to process.
+    Check if there's recent data in pmr_production_data table to process using Spark cluster.
     
     Args:
-        connection_params: Database connection parameters (optional, will fetch if not provided)
-        days: Number of days to look back for recent data (default: 3)
+        spark: SparkSession instance (optional, will create if not provided)
+        days: Number of days to look back for recent data (default: 30)
     
     Returns:
         int: Number of recent records found
     """
+    spark_created = False
     try:
-        # Get connection parameters if not provided
-        if not connection_params:
-            try:
-                from dags.db_utils import get_postgres_connection_params
-                connection_params = get_postgres_connection_params("pg-ssg")
-            except Exception as e:
-                print(f"Error getting connection params from db_utils: {e}")
-                connection_params = get_connection_params_fallback()
+        # Create Spark session if not provided
+        if spark is None:
+            print("Creating Spark session for data check...")
+            spark = create_spark_session()
+            spark_created = True
         
-        print(f"Checking for data from last {days} days in operator_daily_performance table...")
+        # Get source connection parameters (INA-7A)
+        print("Getting source database connection (INA-7A)...")
+        source_conn = get_postgres_source_connection()
         
-        # Connect to PostgreSQL
-        conn = psycopg2.connect(
-            host=connection_params.get("host"),
-            port=connection_params.get("port", "5432"),
-            database=connection_params.get("database"),
-            user=connection_params.get("user"),
-            password=connection_params.get("password")
-        )
+        # Build query to check for recent data
+        query = f"""
+        (
+            SELECT COUNT(*) as record_count 
+            FROM pmr_production_data 
+            WHERE ppd_date >= CURRENT_DATE - INTERVAL '{days} days'
+        ) t
+        """
         
-        cursor = conn.cursor()
+        print(f"Checking for data in last {days} days using Spark cluster...")
         
-        # Check if there's recent data
-        cursor.execute(f"""
-            SELECT COUNT(*) FROM operator_daily_performance 
-            WHERE created_at >= CURRENT_DATE - INTERVAL '{days} days'
-        """)
-        count = cursor.fetchone()[0]
+        # Read data using Spark JDBC
+        count_df = spark.read \
+            .format("jdbc") \
+            .option("url", source_conn["jdbc_url"]) \
+            .option("dbtable", query) \
+            .option("user", source_conn["user"]) \
+            .option("password", source_conn["password"]) \
+            .option("driver", "org.postgresql.Driver") \
+            .load()
         
-        cursor.close()
-        conn.close()
+        # Get the count
+        count = count_df.first()["record_count"]
         
-        print(f"✓ Found {count} recent records in operator_daily_performance table")
+        print(f"✓ Found {count:,} recent records in pmr_production_data table (via Spark)")
         return count
         
     except Exception as e:
@@ -304,6 +335,14 @@ def check_for_recent_data(connection_params: dict = None, days: int = 3) -> int:
         import traceback
         traceback.print_exc()
         return 0
+    finally:
+        # Stop Spark session if we created it
+        if spark_created and spark is not None:
+            try:
+                spark.stop()
+                print("Spark session stopped after data check")
+            except:
+                pass
 
 
 
@@ -314,26 +353,45 @@ def transform_data(spark):
     """Transform data to create aggregated tables"""
     try:
         print("Starting data transformation...")
-        # Get database connection parameters for PostgreSQL (target)
-        print("Getting PostgreSQL connection parameters...")
         
-        # Use db_utils.py to get connection parameters with fallback
+        # Get SOURCE database connection parameters (INA-7A) for reading data
+        print("Getting SOURCE database connection parameters (INA-7A)...")
         try:
-            postgres_connection_params = get_postgres_connection_params("pg-ssg")
+            source_connection_params = get_postgres_source_connection()
+            print(f"✓ Source connection established: {source_connection_params['database']}")
         except Exception as e:
-            print(f"Error getting connection params from db_utils: {e}")
-            print("Using fallback method with environment variables...")
-            postgres_connection_params = get_connection_params_fallback()
-            
-        postgres_jdbc_properties = get_postgres_jdbc_properties(postgres_connection_params)
-        postgres_jdbc_url = postgres_connection_params["jdbc_url"]
+            print(f"Error getting source connection params: {e}")
+            raise
         
-        # Print connection details (without password for security)
-        print(f"PostgreSQL Host: {postgres_connection_params['host']}")
-        print(f"PostgreSQL Port: {postgres_connection_params['port']}")
-        print(f"PostgreSQL Database: {postgres_connection_params['database']}")
-        print(f"PostgreSQL User: {postgres_connection_params['user']}")
-        print(f"PostgreSQL JDBC URL: {postgres_jdbc_url}")
+        # Get TARGET database connection parameters (pg-ssg) for writing data
+        print("Getting TARGET database connection parameters (pg-ssg)...")
+        try:
+            target_connection_params = get_target_postgres_connection()
+            print(f"✓ Target connection established: {target_connection_params['database']}")
+        except Exception as e:
+            print(f"Error getting target connection params: {e}")
+            raise
+        
+        # Use SOURCE connection for reading data
+        source_jdbc_properties = get_postgres_jdbc_properties(source_connection_params)
+        source_jdbc_url = source_connection_params["jdbc_url"]
+        
+        # Print SOURCE connection details (without password for security)
+        print("=" * 80)
+        print("SOURCE Connection (INA-7A) - Reading Data From:")
+        print(f"  Host: {source_connection_params['host']}")
+        print(f"  Port: {source_connection_params['port']}")
+        print(f"  Database: {source_connection_params['database']}")
+        print(f"  User: {source_connection_params['user']}")
+        print(f"  JDBC URL: {source_jdbc_url}")
+        print("=" * 80)
+        print("TARGET Connection (pg-ssg) - Writing Data To:")
+        print(f"  Host: {target_connection_params['host']}")
+        print(f"  Port: {target_connection_params['port']}")
+        print(f"  Database: {target_connection_params['database']}")
+        print(f"  User: {target_connection_params['user']}")
+        print(f"  JDBC URL: {target_connection_params['jdbc_url']}")
+        print("=" * 80)
         
         # Debug: Print Spark configuration
         print("Spark configuration:")
@@ -346,25 +404,66 @@ def transform_data(spark):
         
         df = None
         row_count = 0
-        
-        # Define the query
+        # "odpd_key","odp_key","odp_em_key","odp_em_firstname","p_date","shift","source_connection","hanger_start_time","hanger_conplete_time","oc_key","oc_ob_id","oc_description","st_key","st_id","st_description","cm_code","cm_description","sm_code","sm_description","odpd_quantity","fg_item_key","odpd_workstation","odpd_wc_key","odpd_current_station","oc_actual_time","oc_standard_time","ppd_efficiency","ppd_tvwh"
         query = """
-           (SELECT odp_date, oc_description, shift, odp_em_key, em_firstname,
-                odpd_quantity, source_connection
-            FROM operator_daily_performance
-            WHERE odp_date >= CURRENT_DATE - INTERVAL '15 days') t
+           (
+            SELECT
+                odp.ppd_key::text AS odpd_key,
+                odp.ppd_hei_key::text AS odp_key,
+                CASE 
+                    WHEN odp.ppd_hei_code ~ '^[0-9]+$' THEN odp.ppd_hei_code::int 
+                    ELSE NULL 
+                END AS odp_em_key,
+                odp.ppd_hei_name::text AS em_firstname,
+                COALESCE(odp.ppd_p_date,odp.ppd_date)::date AS odp_date,
+                odp.ppd_p_shift::text AS shift,
+                CASE
+                    WHEN LEFT(odp.ppd_bls_code, 2) = '10' THEN 'line-30'::text
+                    WHEN LEFT(odp.ppd_bls_code, 2) = '11' THEN 'line-21'::text
+                    WHEN LEFT(odp.ppd_bls_code, 2) = '12' THEN 'line-32'::text
+                    ELSE odp.ppd_bls_code::text
+                END AS source_connection,
+                ppd_start_time::timestamp AS odp_first_hanger_time,
+                ppd_complete_time::timestamp AS odp_last_hanger_time,
+                odp.ppd_poi_code::text AS odpd_oc_key,
+                odp.ppd_poi_name::text AS oc_description,
+                odp.ppd_psi_key::text AS odpd_st_key,
+                odp.ppd_psi_code::text AS st_id,
+                odp.ppd_psi_name::text AS st_description,
+                odp.ppd_pci_code::text AS odpd_cm_key,
+                odp.ppd_pci_name::text AS cm_description,
+                odp.ppd_psz_code::text AS odpd_sm_key,
+                odp.ppd_psz_name::text AS sm_description,
+                odp.ppd_quantity::numeric AS odpd_quantity,
+                CASE WHEN odp.ppd_poi_name = 'Loading/Panel Segregation' THEN 
+                    odp.ppd_quantity::numeric ELSE 0 END AS loading_qty,
+                CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN 
+                    odp.ppd_quantity::numeric ELSE 0 END AS unloading_qty,
+                odp.ppd_pwb_code::text AS fg_item_key,
+                odp.ppd_bls_code::text AS odpd_workstation,
+                LEFT(odp.ppd_bls_code, 2)::numeric AS odpd_wc_key,
+                odp.ppd_bls_name::text AS odp_current_station,
+                odp.ppd_total_timeconsuming::float AS odpd_actual_time,
+                odp.ppd_standard_time::float AS oc_standard_time,
+                odp.ppd_efficiency::float AS efficiency,
+                odp.ppd_tvwh::float AS ppd_tvwh
+            FROM pmr_production_data AS odp
+            WHERE odp.ppd_date >= CURRENT_DATE - INTERVAL '30 days'
+            ORDER BY
+                ppd_complete_time NULLS LAST
+            ) t
         """
         
-        # Primary method: Single-connection read with optimized settings
+        # Primary method: Single-connection read with optimized settings from SOURCE database
         try:
-            print("Using single-connection read with optimized fetch size and timeouts...")
+            print("Reading from SOURCE database (INA-7A) with optimized fetch size and timeouts...")
             
             df = spark.read \
                 .format("jdbc") \
-                .option("url", postgres_jdbc_url) \
+                .option("url", source_jdbc_url) \
                 .option("dbtable", query) \
-                .option("user", postgres_jdbc_properties["user"]) \
-                .option("password", postgres_jdbc_properties["password"]) \
+                .option("user", source_jdbc_properties["user"]) \
+                .option("password", source_jdbc_properties["password"]) \
                 .option("driver", "org.postgresql.Driver") \
                 .option("fetchsize", "5000") \
                 .option("queryTimeout", "600") \
@@ -381,14 +480,14 @@ def transform_data(spark):
             print(f"⚠ Primary read failed: {primary_error}")
             print("Attempting fallback without explicit driver...")
             
-            # Fallback: Let Spark auto-detect the driver
+            # Fallback: Let Spark auto-detect the driver from SOURCE database
             try:
                 df = spark.read \
                     .format("jdbc") \
-                    .option("url", postgres_jdbc_url) \
+                    .option("url", source_jdbc_url) \
                     .option("dbtable", query) \
-                    .option("user", postgres_jdbc_properties["user"]) \
-                    .option("password", postgres_jdbc_properties["password"]) \
+                    .option("user", source_jdbc_properties["user"]) \
+                    .option("password", source_jdbc_properties["password"]) \
                     .option("fetchsize", "5000") \
                     .option("queryTimeout", "600") \
                     .load()
@@ -437,46 +536,18 @@ def transform_data(spark):
             for cfg in TARGETS:
                 print(f"Processing target table: {cfg['table']}")
 
-                # Filter out records with NULL values in primary key columns
-                if cfg["table"] == "odp_date_oc":
-                    # oc_description is part of PK, must not be NULL
-                    filtered_df = df.filter(df["oc_description"].isNotNull())
-                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
-                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
-                        filtered_count = filtered_df.count()
-                        print(f"Filtered out {row_count - filtered_count} records with null oc_description")
-                    df_to_process = filtered_df
-                elif cfg["table"] == "odp_date_employee":
-                    # em_firstname is part of PK, must not be NULL
-                    filtered_df = df.filter(df["em_firstname"].isNotNull())
-                    if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
-                        filtered_df = filtered_df.persist(StorageLevel.MEMORY_AND_DISK)
-                        filtered_count = filtered_df.count()
-                        print(f"Filtered out {row_count - filtered_count} records with null em_firstname")
-                    df_to_process = filtered_df
-                else:
-                    df_to_process = df
+       
+                df_to_process = df
 
-                # Create aggregated dataframe based on group columns
-                agg_df = df_to_process.groupBy(*cfg["group"]) \
-                          .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
 
-                # Counting triggers a full Spark job. Make it optional (only for debugging/metrics).
-                record_count = None
-                if os.getenv("DEBUG_ROWCOUNTS", "0") == "1":
-                    try:
-                        record_count = agg_df.count()
-                    except Exception as e:
-                        print(f"Error counting records for {cfg['table']}: {str(e)}")
-                        record_count = 0
 
-                # Perform upsert for this target
+                # Perform upsert for this target (using TARGET connection)
                 success = upsert_data_via_spark(
                     spark=spark,
-                    data_df=agg_df,
+                    data_df=df_to_process,
                     table_name=cfg["table"],
                     key_columns=cfg["pk"],
-                    connection_params=postgres_connection_params
+                    connection_params=target_connection_params
                 )
 
                 if not success:
@@ -491,11 +562,11 @@ def transform_data(spark):
 
                 tables_processed.append({
                     "table": cfg["table"],
-                    "records": record_count if record_count is not None else "(count disabled)"
+                    "records": row_count if row_count is not None else "(count disabled)"
                 })
 
-                if record_count is not None:
-                    print(f"Successfully upserted {record_count} records to {cfg['table']} table")
+                if row_count is not None:
+                    print(f"Successfully upserted {row_count} records to {cfg['table']} table")
                 else:
                     print(f"Successfully upserted records to {cfg['table']} table (count disabled)")
 

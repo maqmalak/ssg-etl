@@ -370,7 +370,7 @@ def data_sync_mssql_to_postgres():
     # ---------------------------------------------------------------- #
     src = source_check()
     tgt = target_check()
-    # views = create_views()
+    views = create_views()
     tables = list_tables()
 
     # Create the load tasks but control execution based on whether the table exists
@@ -383,7 +383,7 @@ def data_sync_mssql_to_postgres():
         results >> summary
 
     # Ensure source_check runs before target_check as requested: source_check >> target_check
-    [src >>  tgt >>  tables] >> tg 
+    [src >>  tgt >>  views >> tables] >> tg 
     tg >> end
 
 

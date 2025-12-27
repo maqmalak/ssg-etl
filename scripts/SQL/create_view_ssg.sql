@@ -35,9 +35,11 @@ IF OBJECT_ID('dbo.Operationinformation', 'V') IS NOT NULL
 GO
 
 CREATE VIEW dbo.Operationinformation AS
-SELECT 
+SELECT
+    ROW_NUMBER() OVER (ORDER BY a.Dated, a.ArticleNo, b.SubOperation_ID ) AS id, 
     a.MainDeptt_ID,
     a.ApplicableDate,
+    a.BaseArticleNo,
     a.ArticleNo,
     a.ConversionFactor,
     a.Mnth,
@@ -66,6 +68,7 @@ GO
 
 CREATE VIEW dbo.Loadinginformation AS
 SELECT 
+    ROW_NUMBER() OVER (ORDER BY Dated, BarCode, PONo, Item_ID ) AS id, 
     Dated,
     BarCode,
     MainDeptt_ID,
@@ -80,30 +83,30 @@ WHERE MainDeptt_ID = 'DTS'
 GO
 
 
--- 4. INAEmployees
-IF OBJECT_ID('dbo.INAEmployees', 'V') IS NOT NULL
-    DROP VIEW dbo.INAEmployees;
+-- 4. Article
+IF OBJECT_ID('dbo.Article', 'V') IS NOT NULL
+    DROP VIEW dbo.Article;
 GO
 
-CREATE VIEW dbo.INAEmployees AS
-SELECT 
-    ID,
-    Title,
-    Desig_ID,
-    Deptt_ID,
-    Line_ID,
-    Location_ID,
-    Joindate,
-    add1,
-    Mobile,
-    ActiveStatus,
-    Male
-FROM dbo.EmployeeDetails
-WHERE Deptt_ID = '1-06-13'
-  AND Location_ID BETWEEN '040' AND '041'
-  AND ActiveStatus = 'active';
-GO
+CREATE VIEW dbo.Article AS
+select	id,
+		title	as TIS_StyleDescription,
+		model	as TIS_StyleCollection,
+				BaseArticleNo,
+		FG_ArticleNo,
+		Category_ID,
+		brand	as style_brand,
+		FG_Season as style_season,
+		FG_BallSize as TIS_StyleSize,
+		FG_Colour   as TIS_StyleColour,
+		CreationDate,
+		PicEntryNo,
+		FMaterial,
+		ItemActive
+	 FROM         dbo.Coa31
 
+where FMaterial=1
+GO
 
 -- 5. hangerline_emp (MOST IMPORTANT ONE – FULLY FIXED)
 IF OBJECT_ID('dbo.hangerline_emp', 'V') IS NOT NULL

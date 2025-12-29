@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
+etl_operator_daily_performance.py
+
 Optimized PySpark ETL for operator_daily_performance aggregations.
 
-Features:
-- Avoid toPandas() (no driver OOM risk)
-- Staging table + single SQL upsert per target
+Key points:
+- No toPandas() (keeps pipeline distributed)
+- Spark JDBC write -> staging table
+- Postgres INSERT..ON CONFLICT upsert from staging -> target
 - Accurate per-target row counts via staging COUNT(*)
 - Rich metrics JSON output for Airflow XCom
-- Minimal Spark config; stable in containers
-
-Usage:
-  spark-submit etl_operator_daily_performance.py --conn-id pg-ssg --lookback-days 7 --metrics-path /path/metrics.json
 """
+
+from __future__ import annotations
 
 import os
 import json
@@ -20,19 +21,48 @@ import argparse
 import logging
 from datetime import datetime
 from contextlib import contextmanager
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 
 import psycopg2
-from airflow.hooks.base import BaseHook
+
+# Airflow is available in your Airflow image; Spark jobs run inside it (Option A)
+try:
+    from airflow.hooks.base import BaseHook
+except Exception:
+    BaseHook = None  # fallback to env vars
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import sum as spark_sum
 from pyspark import StorageLevel
 
 
-# -------------------------
-# Config / constants
-# -------------------------
+# -----------------------------
+# Logging
+# -----------------------------
+logger = logging.getLogger("etl_odp")
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.handlers[:] = [_handler]
+
+
+def log_event(event: str, **fields):
+    payload = {"event": event, **fields}
+    logger.info(json.dumps(payload, default=str))
+
+
+@contextmanager
+def timed(durations: dict, key: str):
+    t0 = time.time()
+    try:
+        yield
+    finally:
+        durations[key] = round(time.time() - t0, 3)
+
+
+# -----------------------------
+# Targets
+# -----------------------------
 TARGETS = [
     {
         "table": "odp_date_oc",
@@ -55,55 +85,47 @@ TARGETS = [
 ]
 
 
-# -------------------------
-# Logging
-# -------------------------
-logger = logging.getLogger("etl_odp")
-logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-logger.handlers[:] = [handler]
-
-
-def log_event(event: str, **fields):
-    payload = {"event": event, **fields}
-    logger.info(json.dumps(payload, default=str))
-
-
-@contextmanager
-def timed(durations: dict, key: str):
-    t0 = time.time()
-    try:
-        yield
-    finally:
-        durations[key] = round(time.time() - t0, 3)
-
-
-# -------------------------
+# -----------------------------
 # Postgres helpers
-# -------------------------
-def get_postgres_connection_params(conn_id: str) -> Dict[str, Any]:
+# -----------------------------
+def get_postgres_connection_params(conn_id: str = "pg-ssg") -> Dict[str, Any]:
     """
-    Prefer Airflow connection; fallback to env vars.
-    """
-    try:
-        c = BaseHook.get_connection(conn_id)
-        host = c.host
-        port = c.port or 5432
-        database = c.schema
-        user = c.login
-        password = c.password
-        if not all([host, database, user]):
-            raise ValueError("Airflow connection missing required fields")
-        logger.info("Using Airflow connection '%s' (%s:%s/%s)", conn_id, host, port, database)
-    except Exception as e:
-        logger.warning("Airflow connection '%s' not usable, falling back to env vars: %s", conn_id, e)
-        host = os.getenv("POSTGRES_HOST", "127.0.0.1")
-        port = int(os.getenv("POSTGRES_PORT", "5432"))
-        database = os.getenv("POSTGRES_DB", "ssg")
-        user = os.getenv("POSTGRES_USER", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "")
+    Prefer Airflow Connection; fallback to environment variables.
 
+    Env fallback vars:
+      POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+    """
+    # 1) Airflow connection
+    if BaseHook is not None:
+        try:
+            c = BaseHook.get_connection(conn_id)
+            host = c.host
+            port = c.port or 5432
+            database = c.schema
+            user = c.login
+            password = c.password
+            if not all([host, database, user]):
+                raise ValueError("Airflow connection missing required fields")
+            logger.info("Using Airflow connection '%s' (%s:%s/%s)", conn_id, host, port, database)
+            return {
+                "host": host,
+                "port": int(port),
+                "database": database,
+                "user": user,
+                "password": password,
+                "jdbc_url": f"jdbc:postgresql://{host}:{port}/{database}",
+            }
+        except Exception as e:
+            logger.warning("Airflow connection '%s' not usable, fallback to env: %s", conn_id, e)
+
+    # 2) Env fallback
+    host = os.getenv("POSTGRES_HOST", "172.16.7.6")
+    port = int(os.getenv("POSTGRES_PORT", "5432"))
+    database = os.getenv("POSTGRES_DB", "ssg")
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+
+    logger.info("Using env connection params %s:%s/%s user=%s", host, port, database, user)
     return {
         "host": host,
         "port": port,
@@ -140,16 +162,17 @@ def fetch_one_int(pg: Dict[str, Any], sql: str) -> int:
             return int(cur.fetchone()[0])
 
 
-# -------------------------
-# Spark
-# -------------------------
+# -----------------------------
+# Spark helpers
+# -----------------------------
 def create_spark_session(app_name: str) -> SparkSession:
-    spark_master = os.getenv("SPARK_MASTER_URL", "local[4]")
-
+    """
+    SparkSession for standalone cluster. Master provided via env SPARK_MASTER_URL or defaults local.
+    In Airflow Option A, SparkSubmitOperator already passes master; spark-submit sets it.
+    """
     builder = (
         SparkSession.builder
         .appName(app_name)
-        .master(spark_master)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.sql.shuffle.partitions", os.getenv("SPARK_SHUFFLE_PARTITIONS", "48"))
@@ -157,23 +180,6 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.network.timeout", "600s")
         .config("spark.executor.heartbeatInterval", "60s")
     )
-
-    # JDBC driver: allow override or use common paths
-    jdbc_jar = os.getenv("POSTGRES_JDBC_JAR")
-    if not jdbc_jar:
-        for p in (
-            "/opt/airflow/sparkFiles/jdbc-drivers/postgresql-42.7.3.jar",
-            "/opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar",
-        ):
-            if os.path.exists(p):
-                jdbc_jar = p
-                break
-
-    if jdbc_jar and os.path.exists(jdbc_jar):
-        builder = builder.config("spark.jars", jdbc_jar)
-        logger.info("Using PostgreSQL JDBC driver: %s", jdbc_jar)
-    else:
-        logger.warning("PostgreSQL JDBC jar not found (set POSTGRES_JDBC_JAR if needed).")
 
     spark = builder.getOrCreate()
     logger.info("Spark started: master=%s version=%s", spark.sparkContext.master, spark.version)
@@ -209,13 +215,32 @@ def read_source_df(spark: SparkSession, pg: Dict[str, Any], lookback_days: int, 
     )
 
     df = df.persist(StorageLevel.MEMORY_AND_DISK)
+
     if debug_rowcounts:
         n = df.count()
         logger.info("Loaded source rows: %d", n)
     else:
-        logger.info("Loaded source data (Spark count skipped; enable with --debug-rowcounts).")
+        logger.info("Loaded source data (Spark count skipped; enable --debug-rowcounts to count source rows).")
 
     return df
+
+
+def upsert_from_staging(pg: Dict[str, Any], staging_table: str, target_table: str, key_columns: List[str], columns: List[str]) -> None:
+    cols_str = ", ".join(columns)
+    keys_str = ", ".join(key_columns)
+    non_key_cols = [c for c in columns if c not in key_columns]
+    if not non_key_cols:
+        raise ValueError("No non-key columns to update in upsert.")
+
+    set_clause = ", ".join([f"{c}=EXCLUDED.{c}" for c in non_key_cols])
+
+    sql = f"""
+    INSERT INTO {target_table} ({cols_str})
+    SELECT {cols_str} FROM {staging_table}
+    ON CONFLICT ({keys_str})
+    DO UPDATE SET {set_clause};
+    """
+    exec_sql(pg, sql)
 
 
 def upsert_via_staging(
@@ -226,15 +251,18 @@ def upsert_via_staging(
     staging_table: str,
 ) -> Dict[str, Any]:
     """
-    Write to staging using Spark JDBC, then single SQL upsert staging->target.
-    Returns metrics including staging_rows and durations.
+    1) Drop staging
+    2) Spark JDBC write staging (distributed)
+    3) Count staging rows in Postgres (cheap)
+    4) Upsert staging -> target
+    5) Drop staging
     """
-    metrics = {"staging_rows": None, "durations": {}, "success": False}
+    metrics: Dict[str, Any] = {"success": False, "staging_rows": None, "durations": {}}
 
     cols = agg_df.columns
     non_key_cols = [c for c in cols if c not in key_columns]
     if not non_key_cols:
-        raise ValueError("No non-key columns to update.")
+        raise ValueError("No non-key columns found for update set clause")
 
     exec_sql(pg, f"DROP TABLE IF EXISTS {staging_table};")
 
@@ -254,19 +282,8 @@ def upsert_via_staging(
     with timed(metrics["durations"], "staging_count_sec"):
         metrics["staging_rows"] = fetch_one_int(pg, f"SELECT COUNT(*) FROM {staging_table};")
 
-    cols_str = ", ".join(cols)
-    keys_str = ", ".join(key_columns)
-    set_clause = ", ".join([f"{c}=EXCLUDED.{c}" for c in non_key_cols])
-
-    upsert_sql = f"""
-    INSERT INTO {target_table} ({cols_str})
-    SELECT {cols_str} FROM {staging_table}
-    ON CONFLICT ({keys_str})
-    DO UPDATE SET {set_clause};
-    """
-
     with timed(metrics["durations"], "upsert_sec"):
-        exec_sql(pg, upsert_sql)
+        upsert_from_staging(pg, staging_table, target_table, key_columns, cols)
 
     with timed(metrics["durations"], "drop_staging_sec"):
         exec_sql(pg, f"DROP TABLE IF EXISTS {staging_table};")
@@ -275,42 +292,55 @@ def upsert_via_staging(
     return metrics
 
 
-def run_etl(args) -> Dict[str, Any]:
+# -----------------------------
+# Main ETL
+# -----------------------------
+def run_etl(
+    conn_id: str,
+    lookback_days: int,
+    metrics_path: str,
+    app_name: str,
+    debug_rowcounts: bool,
+) -> Dict[str, Any]:
     metrics: Dict[str, Any] = {
         "success": False,
         "started_at": datetime.utcnow().isoformat(),
         "ended_at": None,
-        "lookback_days": args.lookback_days,
-        "debug_rowcounts": args.debug_rowcounts,
+        "conn_id": conn_id,
+        "lookback_days": lookback_days,
+        "debug_rowcounts": debug_rowcounts,
         "spark": {},
         "source": {
             "table": "operator_daily_performance",
-            "filter": f"odp_date >= CURRENT_DATE - INTERVAL '{args.lookback_days} days'",
+            "filter": f"odp_date >= CURRENT_DATE - INTERVAL '{lookback_days} days'",
             "rows": None,
         },
         "targets": [],
         "warnings": [],
         "durations": {},
         "message": "",
+        "metrics_path": metrics_path,
     }
 
-    spark = None
+    spark: Optional[SparkSession] = None
+    df = None
+
     try:
-        spark = create_spark_session(args.app_name)
+        spark = create_spark_session(app_name)
         metrics["spark"] = {
             "master": spark.sparkContext.master,
             "app_name": spark.sparkContext.appName,
             "version": spark.version,
         }
 
-        pg = get_postgres_connection_params(args.conn_id)
+        pg = get_postgres_connection_params(conn_id)
 
-        log_event("etl_start", lookback_days=args.lookback_days, conn_id=args.conn_id)
+        log_event("etl_start", lookback_days=lookback_days, conn_id=conn_id)
 
         with timed(metrics["durations"], "read_source_sec"):
-            df = read_source_df(spark, pg, args.lookback_days, args.debug_rowcounts)
+            df = read_source_df(spark, pg, lookback_days, debug_rowcounts)
 
-        if args.debug_rowcounts:
+        if debug_rowcounts:
             with timed(metrics["durations"], "source_count_sec"):
                 metrics["source"]["rows"] = df.count()
             if metrics["source"]["rows"] == 0:
@@ -322,7 +352,7 @@ def run_etl(args) -> Dict[str, Any]:
         sink_partitions = int(os.getenv("JDBC_SINK_PARTITIONS", "16"))
 
         for cfg in TARGETS:
-            t = {
+            t: Dict[str, Any] = {
                 "table": cfg["table"],
                 "group": cfg["group"],
                 "pk": cfg["pk"],
@@ -346,6 +376,7 @@ def run_etl(args) -> Dict[str, Any]:
                     .agg(spark_sum("odpd_quantity").alias("odpd_quantity"))
                 )
 
+            # Prevent too many JDBC writers / connections:
             agg_df = agg_df.coalesce(sink_partitions)
 
             staging = f"{cfg['table']}__staging"
@@ -364,12 +395,12 @@ def run_etl(args) -> Dict[str, Any]:
             t["success"] = True
             metrics["targets"].append(t)
 
-            log_event("target_done", table=cfg["table"], staging_rows=t["staging_rows"], durations=t["durations"])
-
-        try:
-            df.unpersist(blocking=False)
-        except Exception as e:
-            metrics["warnings"].append(f"Unpersist failed: {e}")
+            log_event(
+                "target_done",
+                table=t["table"],
+                staging_rows=t["staging_rows"],
+                durations=t["durations"],
+            )
 
         metrics["success"] = True
         metrics["ended_at"] = datetime.utcnow().isoformat()
@@ -386,6 +417,12 @@ def run_etl(args) -> Dict[str, Any]:
         return metrics
 
     finally:
+        # Unpersist + stop
+        if df is not None:
+            try:
+                df.unpersist(blocking=False)
+            except Exception:
+                pass
         if spark is not None:
             try:
                 spark.stop()
@@ -403,7 +440,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--conn-id", default=os.getenv("PG_CONN_ID", "pg-ssg"))
     p.add_argument("--lookback-days", type=int, default=int(os.getenv("LOOKBACK_DAYS", "7")))
-    p.add_argument("--metrics-path", default=os.getenv("METRICS_PATH", "/opt/airflow/logs/etl_metrics.json"))
+    p.add_argument("--metrics-path", default=os.getenv("METRICS_PATH", "/opt/airflow/logs/etl_metrics/etl_metrics.json"))
     p.add_argument("--app-name", default=os.getenv("SPARK_APP_NAME", "HangerLaneDataTransformation"))
     p.add_argument("--debug-rowcounts", action="store_true", default=os.getenv("DEBUG_ROWCOUNTS", "0") == "1")
     return p.parse_args()
@@ -411,7 +448,13 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    m = run_etl(args)
+    m = run_etl(
+        conn_id=args.conn_id,
+        lookback_days=args.lookback_days,
+        metrics_path=args.metrics_path,
+        app_name=args.app_name,
+        debug_rowcounts=args.debug_rowcounts,
+    )
     write_metrics(m, args.metrics_path)
     # Helpful for grepping logs:
     print(json.dumps({"metrics_path": args.metrics_path, "success": m.get("success")}, default=str))

@@ -2,7 +2,7 @@ FROM apache/airflow:2.11.0
 
 # Accept host UID and GID
 ARG HOST_UID=50000
-ARG HOST_GID=50000
+ARG HOST_GID=0
 
 USER root
 
@@ -27,7 +27,8 @@ RUN apt-get update && \
         openjdk-17-jre-headless \
         tdsodbc \
         build-essential \
-        ca-certificates && \
+        ca-certificates \
+        procps && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------

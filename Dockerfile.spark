@@ -1,0 +1,37 @@
+# Custom Spark Dockerfile to add missing utilities
+FROM apache/spark:3.5.0
+
+# Install missing utilities (procps provides ps command)
+USER root
+RUN apt-get update && \
+    apt-get install -y procps curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create startup scripts that bypass spark-class issues
+RUN echo '#!/bin/bash\n\
+export SPARK_HOME=/opt/spark\n\
+MASTER_HOST=${SPARK_MASTER_HOST:-0.0.0.0}\n\
+exec java -cp "/opt/spark/jars/*" \\\n\
+  -Xmx4g \\\n\
+  org.apache.spark.deploy.master.Master \\\n\
+  --host ${MASTER_HOST} \\\n\
+  --port 7077 \\\n\
+  --webui-port 8080' > /opt/spark/bin/start-master-direct.sh && \
+  chmod +x /opt/spark/bin/start-master-direct.sh
+
+RUN echo '#!/bin/bash\n\
+export SPARK_HOME=/opt/spark\n\
+MASTER_URL=$1\n\
+MEMORY=${2:-12G}\n\
+CORES=${3:-4}\n\
+exec java -cp "/opt/spark/jars/*" \\\n\
+  -Xmx${MEMORY} \\\n\
+  org.apache.spark.deploy.worker.Worker \\\n\
+  ${MASTER_URL} \\\n\
+  --memory ${MEMORY} \\\n\
+  --cores ${CORES} \\\n\
+  --webui-port 8081' > /opt/spark/bin/start-worker-direct.sh && \
+  chmod +x /opt/spark/bin/start-worker-direct.sh
+
+# Switch back to spark user
+USER spark

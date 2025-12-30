@@ -1,22 +1,41 @@
 """
-DAG for running hanger line data transformation daily using SparkSubmitOperator.
-This DAG submits Spark jobs to the cluster for distributed processing.
-
-Best Practices:
-- Uses SparkSubmitOperator for proper Spark job submission
-- JSON metrics for monitoring and XCom communication
-- Configurable via Airflow Variables
-- Clean resource management (Spark handles its own session lifecycle)
+DAG for running hanger line data transformation daily.
+This DAG checks if there's data to process, and if so, executes the transformation.
 """
 
 from datetime import datetime, timedelta
-import json
-import logging
 from airflow import DAG
+from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
-from airflow.operators.python import PythonOperator
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
 from pendulum import timezone
+import psycopg2
+import logging
+import sys
+from airflow.hooks.base import BaseHook
+
+# Add the sparkFiles directory to the Python path
+# sparkfiles_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sparkFiles')
+# scripts_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts')
+# sys.path.append(os.path.abspath(sparkfiles_path))
+# sys.path.append(os.path.abspath(scripts_path))
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+# Import functions from hangerline_transform_spark.py (working Spark implementation with optimized upsert)
+try:
+    from sparkFiles.hangerline_transform_spark import (
+        create_spark_session,
+        transform_data,
+        check_for_recent_data
+    )
+    print("Successfully imported functions from hangerline_transform_spark.py")
+except ImportError as e:
+    print(f"Error importing functions from hangerline_transform_spark.py: {e}")
+    import traceback
+    traceback.print_exc()
+
 
 # Timezone configuration
 PKT = timezone("Asia/Karachi")
@@ -25,10 +44,6 @@ PKT = timezone("Asia/Karachi")
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Paths
-SPARK_APP = "/opt/airflow/sparkFiles/hangerline_transform_spark.py"
-METRICS_DIR = "/opt/airflow/logs/etl_metrics"
-
 # Default arguments for the DAG
 default_args = {
     'owner': 'airflow',
@@ -36,179 +51,229 @@ default_args = {
     'start_date': datetime(2025, 11, 20, tzinfo=PKT),
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
-    'execution_timeout': timedelta(hours=2),  # Increased timeout for large data processing
+    'execution_timeout': timedelta(hours=1),
 }
 
-
-def read_metrics_and_push_xcom(metrics_path: str, **context):
+def check_for_data(**context):
     """
-    Reads JSON metrics written by Spark, logs a friendly summary,
-    and returns dict -> stored as XCom automatically.
+    Check if there's data in the operator_daily_performance table to process.
+    Uses the reusable check_for_recent_data() function from hangerline_transform_spark.py
+    Returns 'has_data' if there's data, 'no_data' otherwise.
     """
+    logger.info("Starting check_for_data task")
+    
     try:
-        with open(metrics_path, "r", encoding="utf-8") as f:
-            metrics = json.load(f)
-    except FileNotFoundError:
-        logger.error("Metrics file not found: %s", metrics_path)
-        return {
-            "success": False,
-            "message": "Metrics file not found",
-            "tables_processed": []
-        }
-    except json.JSONDecodeError as e:
-        logger.error("Invalid JSON in metrics file: %s", e)
-        return {
-            "success": False,
-            "message": f"Invalid metrics JSON: {e}",
-            "tables_processed": []
-        }
-
-    # Extract key information
-    success = metrics.get("success", False)
-    lookback_days = metrics.get("lookback_days", 7)
-    data_loaded = metrics.get("source", {}).get("rows", "(count disabled)")
-    tables_processed = []
-    
-    # Process target tables information
-    for target in metrics.get("targets", []):
-        tables_processed.append({
-            "table": target.get("table"),
-            "records": target.get("staging_rows", "(count disabled)"),
-            "aggregate_sec": target.get("durations", {}).get("aggregate_sec"),
-            "write_sec": target.get("durations", {}).get("write_staging_sec"),
-            "upsert_sec": target.get("durations", {}).get("upsert_sec")
-        })
-
-    # Friendly summary in Airflow logs
-    logger.info("=" * 80)
-    logger.info("=== TRANSFORMATION SUMMARY ===")
-    logger.info(f"✅ Success: {success}")
-    logger.info(f"📅 Lookback Days: {lookback_days}")
-    logger.info(f"📊 Data Loaded: {data_loaded}")
-    logger.info(f"🎯 Spark Master: {metrics.get('spark', {}).get('master', 'N/A')}")
-    logger.info(f"📋 Tables Processed: {len(tables_processed)}")
-    
-    for table_info in tables_processed:
-        table_name = table_info.get("table", "Unknown")
-        records = table_info.get("records", 0)
-        agg_sec = table_info.get("aggregate_sec", 0)
-        write_sec = table_info.get("write_sec", 0)
-        upsert_sec = table_info.get("upsert_sec", 0)
+        # Check if the function was imported successfully
+        if 'check_for_recent_data' not in globals():
+            logger.error("check_for_recent_data function was not imported successfully")
+            # Fallback: proceed with transformation anyway
+            logger.info("Proceeding with transformation despite import error")
+            return 'has_data'
         
-        # Format count with thousand separator if numeric
-        if isinstance(records, (int, float)):
-            count_str = f"{records:,}"
+        # Call the reusable function from spark.py (checks last 3 days by default)
+        count = check_for_recent_data(connection_params=None, days=3)
+        
+        if count > 0:
+            logger.info(f"✓ Found {count:,} recent records. Proceeding with transformation.")
+            return 'has_data'
         else:
-            count_str = str(records)
-        
-        logger.info(f"   • {table_name}: {count_str} rows")
-        logger.info(f"      ⏱️  Aggregate: {agg_sec}s, Write: {write_sec}s, Upsert: {upsert_sec}s")
-    
-    # Log warnings if any
-    warnings = metrics.get("warnings", [])
-    if warnings:
-        logger.warning("⚠️  Warnings:")
-        for w in warnings:
-            logger.warning(f"   - {w}")
-    
-    logger.info(f"💬 Message: {metrics.get('message', 'No message')}")
-    logger.info("=" * 80)
+            logger.info("⚠ No recent data found in operator_daily_performance table")
 
-    # Return structured results for XCom
-    return {
-        "success": success,
-        "data_loaded": data_loaded,
-        "tables_processed": tables_processed,
-        "message": metrics.get("message", ""),
-        "lookback_days": lookback_days,
-        "warnings": warnings
-    }
+            return 'has_data'
 
+            
+    except Exception as e:
+        logger.error(f"Error in check_for_data task: {e}")
+        import traceback
+        traceback.print_exc()
+        # On error, proceed with transformation for debugging
+        logger.info("Proceeding with transformation despite error")
+        return 'has_data'
 
 def log_start(**context):
-    """Log the start of the DAG execution."""
-    logger.info("=" * 80)
+    """
+    Log the start of the DAG execution.
+    """
     logger.info("Starting hanger_line_daily_transform DAG execution")
     logger.info(f"Execution date: {context['execution_date']}")
     logger.info(f"Run ID: {context['run_id']}")
-    logger.info("=" * 80)
     return "DAG execution started"
 
-
 def log_end(**context):
-    """Log the end of the DAG execution."""
-    ti = context['task_instance']
-    results = ti.xcom_pull(task_ids='read_metrics')
-    
-    logger.info("=" * 80)
+    """
+    Log the end of the DAG execution.
+    """
     logger.info("Completed hanger_line_daily_transform DAG execution")
     logger.info(f"Execution date: {context['execution_date']}")
     logger.info(f"Run ID: {context['run_id']}")
-    
-    if results:
-        logger.info(f"Final Status: {'✅ SUCCESS' if results.get('success') else '❌ FAILED'}")
-    
-    logger.info("=" * 80)
     return "DAG execution completed"
 
+def execute_transformation(**context):
+    """
+    Execute the hanger line data transformation using imported functions.
+    Returns detailed transformation results as XCom.
+    """
+    logger.info("Starting hanger line data transformation")
+    
+    spark = None  # Initialize for cleanup in finally block
+    try:
+        # Memory monitoring - check current memory usage
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+            logger.info(f"🔍 Current memory usage: {memory_mb:.2f} MB")
+            
+            # Circuit breaker: if memory usage is already high, skip transformation
+            if memory_mb > 3000:  # 3GB threshold
+                logger.warning(f"⚠️ High memory usage detected ({memory_mb:.2f} MB). Skipping transformation to prevent OOM.")
+                return {
+                    "success": False,
+                    "message": f"Skipped due to high memory usage: {memory_mb:.2f} MB",
+                    "tables_processed": []
+                }
+        except ImportError:
+            logger.warning("psutil not available for memory monitoring")
+        except Exception as mem_err:
+            logger.warning(f"Memory monitoring failed: {mem_err}")
+        
+        # Check if the functions were imported successfully
+        if 'create_spark_session' not in globals() or 'transform_data' not in globals():
+            raise RuntimeError("Required functions were not imported successfully. Check import errors above.")
+
+        # Execute transformation - note transform_data now returns a summary dict, not boolean
+        logger.info("Executing data transformation...")
+        spark = create_spark_session()
+        results = transform_data(spark)  # transform_data handles its own Spark session now
+
+        # Return the complete results dictionary for XCom
+        if results and isinstance(results, dict):
+            logger.info(f"Transformation completed: {results.get('message', 'Unknown status')}")
+            return results
+        else:
+            logger.warning("Transformation returned invalid results")
+            return {"success": False, "message": "Invalid transformation results"}
+
+    except Exception as e:
+        logger.error(f"Error during data transformation: {e}")
+        # Return error details as XCom instead of raising exception
+        return {
+            "success": False,
+            "message": f"Transformation failed: {str(e)}",
+            "tables_processed": []
+        }
+    finally:
+        # Ensure Spark session is properly closed
+        if spark is not None:
+            try:
+                spark.stop()
+                logger.info("✓ Spark session stopped successfully")
+            except Exception as e:
+                logger.warning(f"Error stopping Spark session: {e}")
 
 # Define the DAG
-with DAG(
-    dag_id='hanger_line_daily_transform',
+dag = DAG(
+    'hanger_line_daily_transform',
     default_args=default_args,
-    description='Daily transformation of hanger line data using Spark cluster',
-    schedule="*/7 8-23,0-1 * * 1-6",  # Every 7 min, 8AM–2AM, Mon–Sat
+    description='Daily transformation of hanger line data',
+    # schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
+    schedule="*/15 8-23,0-1 * * 1-6",  # ✅ Every 15 min, 8AM–2AM, Mon–Sat (reduced from 7)
     catchup=False,
-    tags=['ssg', 'hanger_line', 'transformation', 'spark'],
+    tags=['ssg', 'hanger_line', 'transformation'],
     max_active_runs=1
-) as dag:
+)
 
-    # Unique metrics path per run (templated)
-    metrics_path = f"{METRICS_DIR}/metrics__{{{{ dag.dag_id }}}}__{{{{ ts_nodash }}}}.json"
+# Start task
+start_task = PythonOperator(
+    task_id='start',
+    python_callable=log_start,
+    dag=dag
+)
 
-    # Start task
-    start_task = PythonOperator(
-        task_id='start',
-        python_callable=log_start,
-    )
+# Check for data task
+check_data_task = BranchPythonOperator(
+    task_id='check_for_data',
+    python_callable=check_for_data,
+    dag=dag
+)
 
-    # Run Spark ETL job using SparkSubmitOperator
-    run_spark_etl = SparkSubmitOperator(
-        task_id="run_spark_transformation",
-        application=SPARK_APP,
-        conn_id="spark_default",  # Uses existing Spark cluster connection
-        verbose=True,
-        application_args=[
-            "--conn-id", "pg-ssg",
-            "--lookback-days", "{{ var.value.get('odp_lookback_days', 7) }}",
-            "--metrics-path", metrics_path,
-            "--app-name", "HangerLaneDataTransformation_{{ ts_nodash }}",
-            # Uncomment if you want source Spark count in addition:
-            # "--debug-rowcounts",
-        ],
-        env_vars={
-            # Tuning knobs (use Airflow Variables for easy configuration)
-            "JDBC_SINK_PARTITIONS": "{{ var.value.get('odp_jdbc_sink_partitions', 16) }}",
-            "JDBC_BATCHSIZE": "{{ var.value.get('odp_jdbc_batchsize', 5000) }}",
-            "SPARK_SHUFFLE_PARTITIONS": "{{ var.value.get('odp_spark_shuffle_partitions', 48) }}",
-            "JDBC_FETCHSIZE": "{{ var.value.get('odp_jdbc_fetchsize', 10000) }}",
-            "JDBC_QUERY_TIMEOUT": "{{ var.value.get('odp_jdbc_query_timeout', 600) }}",
-            "LOG_LEVEL": "INFO",
-        },
-    )
+# Has data label
+has_data_label = EmptyOperator(
+    task_id='has_data',
+    dag=dag
+)
 
-    # Read metrics and push to XCom
-    read_metrics = PythonOperator(
-        task_id="read_metrics",
-        python_callable=read_metrics_and_push_xcom,
-        op_kwargs={"metrics_path": metrics_path},
-    )
+# Transform task - uses imported functions
+transform_task = PythonOperator(
+    task_id='transform_data',
+    python_callable=execute_transformation,
+    dag=dag
+)
 
-    # End task
-    end_task = PythonOperator(
-        task_id='end',
-        python_callable=log_end,
-    )
+# No data label
+no_data_label = EmptyOperator(
+    task_id='no_data',
+    dag=dag
+)
 
-    # Set task dependencies
-    start_task >> run_spark_etl >> read_metrics >> end_task
+# Skip task
+skip_task = EmptyOperator(
+    task_id='skip_transformation',
+    dag=dag
+)
+
+# Summary task that returns XCom results
+def summarize_transformation_results(**context):
+    """
+    Pull and summarize the transformation XCom results
+    """
+    ti = context['task_instance']
+    results = ti.xcom_pull(task_ids='transform_data')
+
+    if results and isinstance(results, dict):
+        logger.info("=== TRANSFORMATION SUMMARY ===")
+        logger.info(f"✅ Success: {results.get('success', False)}")
+        logger.info(f"📊 Data Loaded: {results.get('data_loaded', 0):,}")
+        logger.info(f"🔄 Data Filtered: {results.get('data_filtered', 0):,}")
+
+        # Log details for each table
+        tables_processed = results.get('tables_processed', [])
+        logger.info("📋 Tables Processed:")
+        for table_info in tables_processed:
+            table_name = table_info.get('table', 'Unknown')
+            record_count = table_info.get('records', 0)
+            # Format count with thousand separator if numeric, otherwise use as-is
+            count_str = f"{record_count:,}" if isinstance(record_count, (int, float)) else str(record_count)
+            logger.info(f"   • {table_name}: {count_str}")
+            # # Remove :, formatting - works for both int and string
+            # logger.info(f"   • {table_name}: {record_count} records")
+
+
+        logger.info(f"💬 Message: {results.get('message', 'No message')}")
+        logger.info("=" * 50)
+
+        return results  # Return the complete results for downstream tasks
+    else:
+        logger.warning("No transformation results found in XCom")
+        return {"error": "No transformation results available"}
+
+summarize_task = PythonOperator(
+    task_id='save_completion_status',
+    python_callable=summarize_transformation_results,
+    dag=dag
+)
+
+# End task
+end_task = PythonOperator(
+    task_id='end',
+    python_callable=log_end,
+    dag=dag
+)
+
+# Set task dependencies
+start_task >> check_data_task
+check_data_task >> has_data_label
+check_data_task >> no_data_label
+has_data_label >> transform_task >> summarize_task >> end_task
+no_data_label >> skip_task >> end_task

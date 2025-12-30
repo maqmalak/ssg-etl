@@ -439,7 +439,7 @@ def transform_data(spark):
                     odp.ppd_quantity::numeric ELSE 0 END AS loading_qty,
                 CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN 
                     odp.ppd_quantity::numeric ELSE 0 END AS unloading_qty,
-                odp.ppd_pwb_code::text AS fg_item_key,
+
                 odp.ppd_bls_code::text AS odpd_workstation,
                 LEFT(odp.ppd_bls_code, 2)::numeric AS odpd_wc_key,
                 odp.ppd_bls_name::text AS odp_current_station,

@@ -209,7 +209,7 @@ services:
     environment:
       <<: *airflow-common-env
       DUMB_INIT_SETSID: "0"
-      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '3'
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -238,7 +238,7 @@ services:
     environment:
       <<: *airflow-common-env
       DUMB_INIT_SETSID: "0"
-      AIRFLOW__CELERY__WORKER_CONCURRENCY: '8'
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: '3'
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
@@ -278,12 +278,16 @@ services:
           export AIRFLOW_UID=$$(id -u)
         fi
         mkdir -v -p /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
+        mkdir -v -p /opt/airflow/logs/dag_processor_manager
+        mkdir -v -p /opt/airflow/logs/scheduler
+        mkdir -v -p /opt/airflow/logs/dag_processor
+        mkdir -v -p /opt/airflow/sparkFiles/apps
         /entrypoint airflow version
         /entrypoint airflow config list >/dev/null
         rm -f /opt/airflow/logs/dag_processor/latest
         rm -f /opt/airflow/logs/scheduler/latest
         find /opt/airflow/logs -type l -name 'latest' -exec rm -f {} \;
-        ionice -c 3 chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config,scripts,sparkFiles}
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/logs || exit 0
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
@@ -329,114 +333,123 @@ services:
 
   spark-master:
     image: apache/spark:3.5.0
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    container_name: spark-master
+    hostname: spark-master
     ports:
-      - "9090:8080"
-      - "7077:7077"
+      - "9090:8080"  # Spark Master UI
+      - "7077:7077"  # Spark Master Port
+      - "4040:4040"  # Spark Application UI
+      - "4041:4041"  # Spark Application UI (additional)
     environment:
-      SPARK_MODE: master
-      SPARK_MASTER_HOST: spark-master
-      SPARK_MASTER_PORT: 7077
-      SPARK_MASTER_WEBUI_PORT: 8080
-      SPARK_DAEMON_MEMORY: 4g
-      SPARK_DRIVER_EXTRACLASSPATH: /opt/spark/work/jdbc-drivers/*
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
-      - spark-master-data:/opt/spark/data
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/airflow/sparkFiles
+      - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+      - ${AIRFLOW_PROJ_DIR:-.}:/workspace
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 6G
           cpus: '2.0'
         reservations:
           memory: 2G
           cpus: '1.0'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 60s
-    restart: always
+    restart: unless-stopped
     networks:
       - airflow_network
 
   spark-worker-1:
     image: apache/spark:3.5.0
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    container_name: spark-worker-1
+    hostname: spark-worker-1
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
       spark-master:
         condition: service_healthy
+    ports:
+      - "8081:8081"  # Worker 1 UI
     environment:
-      SPARK_MODE: worker
-      SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 8g
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_WEBUI_PORT: 8081
-      SPARK_DRIVER_EXTRACLASSPATH: /opt/spark/work/jdbc-drivers/*
-      SPARK_EXECUTOR_EXTRACLASSPATH: /opt/spark/work/jdbc-drivers/*
-      SPARK_EXTRA_CLASSPATH: /opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar:/opt/spark/work/jdbc-drivers/client-2.1.jar:/opt/spark/work/jdbc-drivers/saslprep-1.1.jar:/opt/spark/work/jdbc-drivers/stringprep-1.1.jar
+      - SPARK_MODE=worker
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
-      - spark-worker-1-data:/opt/spark/data
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/airflow/sparkFiles
+      - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+      - ${AIRFLOW_PROJ_DIR:-.}:/workspace
     deploy:
       resources:
         limits:
+          memory: 14G
+          cpus: '4.0'
+        reservations:
           memory: 10G
           cpus: '3.0'
-        reservations:
-          memory: 6G
-          cpus: '2.0'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://spark-master:8080"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 60s
-    restart: always
+    restart: unless-stopped
     networks:
       - airflow_network
 
   spark-worker-2:
     image: apache/spark:3.5.0
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
       spark-master:
         condition: service_healthy
+    ports:
+      - "8082:8081"  # Worker 2 UI
     environment:
-      SPARK_MODE: worker
-      SPARK_WORKER_CORES: 4
-      SPARK_WORKER_MEMORY: 8g
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_WEBUI_PORT: 8082
-      SPARK_DRIVER_EXTRACLASSPATH: /opt/spark/work/jdbc-drivers/*
-      SPARK_EXECUTOR_EXTRACLASSPATH: /opt/spark/work/jdbc-drivers/*
-      SPARK_EXTRA_CLASSPATH: /opt/spark/work/jdbc-drivers/postgresql-42.7.3.jar:/opt/spark/work/jdbc-drivers/client-2.1.jar:/opt/spark/work/jdbc-drivers/saslprep-1.1.jar:/opt/spark/work/jdbc-drivers/stringprep-1.1.jar
+      - SPARK_MODE=worker
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark/work
-      - spark-worker-2-data:/opt/spark/data
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark-data
+      - ${AIRFLOW_PROJ_DIR:-.}:/workspace
     deploy:
       resources:
         limits:
+          memory: 14G
+          cpus: '4.0'
+        reservations:
           memory: 10G
           cpus: '3.0'
-        reservations:
-          memory: 6G
-          cpus: '2.0'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://spark-master:8080"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 60s
-    restart: always
+    restart: unless-stopped
     networks:
       - airflow_network
 
 networks:
   airflow_network:
     driver: bridge
-
+    # ipam:
+    #   config:
+    #     - subnet: 192.168.65.0/24
 volumes:
   postgres-db-volume:
   spark-master-data:

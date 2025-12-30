@@ -40,13 +40,30 @@ def read_metrics_and_xcom(metrics_path: str, **_):
 
     return metrics  # XCom dict
 
+# Default arguments for the DAG
+from datetime import datetime, timedelta
+from pendulum import timezone
+PKT = timezone("Asia/Karachi")
+
+
+default_args = {
+    'owner': 'airflow',
+    'depends_on_past': False,
+    'start_date': datetime(2025, 11, 20, tzinfo=PKT),
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+    'execution_timeout': timedelta(hours=1),
+}
 
 with DAG(
     dag_id=DAG_ID,
-    start_date=datetime(2025, 1, 1),
-    schedule=None,
+    default_args=default_args,
+    description='Daily transformation of hanger line data',
+    # schedule='0 2 * * *',  # Run daily at 2:00 AM PKT
+    schedule="*/15 8-23,0-1 * * 1-6",  # ✅ Every 15 min, 8AM–2AM, Mon–Sat (reduced from 10)
     catchup=False,
-    tags=["spark", "etl", "postgres"],
+    tags=['ssg', 'spark', 'transformation'],
+    max_active_runs=1    
 ) as dag:
 
     metrics_path = f"{METRICS_DIR}/metrics__{{{{ dag.dag_id }}}}__{{{{ ts_nodash }}}}.json"
@@ -58,6 +75,19 @@ with DAG(
         name="odp_etl",
         verbose=True,
         deploy_mode="client",
+        jars="/opt/airflow/sparkFiles/jdbc-drivers/postgresql-42.7.3.jar",
+        driver_memory="1g",         # Reduced from 2g
+        executor_memory="2g",       # Reduced from 4g
+        executor_cores=2,
+        total_executor_cores=4,     # Reduced from 8
+        conf={
+            "spark.sql.adaptive.enabled": "true",
+            "spark.sql.adaptive.coalescePartitions.enabled": "true",
+            "spark.serializer": "org.apache.spark.serializer.KryoSerializer",
+            "spark.executor.memoryOverhead": "512m",
+            "spark.memory.fraction": "0.6",
+            "spark.sql.shuffle.partitions": "16",  # Reduced from default
+        },
         application_args=[
             "--conn-id", "pg-ssg",
             "--lookback-days", "{{ var.value.get('odp_lookback_days', 7) }}",

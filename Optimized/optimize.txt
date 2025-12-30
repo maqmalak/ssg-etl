@@ -1,0 +1,525 @@
+1	Folder Structure Reminder (Critical for Spark)
+./ssg-etl/
+├── dags/                  → Your DAGs
+├── config/       ----find cfg.config
+├──logs/
+	├──dag_processor
+	├──dag_processor_manager
+	├──etl_metrics
+	├──scheduler
+├──scripts
+├──plugins
+├── sparkFiles/
+│   ├── jars/              → JDBC drivers (e.g. mssql-jdbc-12.6.1.jre11.jar)
+│   ├── apps/              → PySpark job scripts (.py)
+│   └── conf/              → Optional spark-defaults.conf
+├── requirements.txt
+├── Dockerfile
+└── docker-compose.yaml
+├── docker-compose-override.yml
+
+
+----docker-compose.yaml
+
+2 two Workers with 16 Cores + 48 GB RAM Total
+    • Only 2 Celery workers (airflow-worker-1 and airflow-worker-2) 
+    • Each worker gets:
+        ◦ CPU: 8.0 limit / 7.0 reserved → 16 cores total 
+        ◦ RAM: 24G limit / 20G reserved → 48 GB total 
+    • Increased AIRFLOW__CELERY__WORKER_CONCURRENCY to 12 per worker → 24 parallel tasks possible (ideal for heavy Spark/Python jobs) 
+    • Spark cluster unchanged (still 16 cores + 40 GB usable for executors) 
+Resource Overview (Safe & Balanced)
+Component
+CPU Limit
+RAM Limit
+2 × Workers
+16.0
+48G
+Scheduler
+3.0
+8G
+Webserver
+2.0
+4G
+Postgres + Redis
+3.0
+7G
+DAG Processor + Triggerer
+2.3
+4G
+Spark Master + Workers
+20.0
+58G
+Total
+~46
+~129G (safe overcommit)
+This configuration gives your Airflow workers maximum power for running large SparkSubmit tasks or heavy Python operators while keeping the Spark cluster strong.
+Just replace your current file and run:
+
+Recommendation: Keep client (the default). It's simpler, more reliable for debugging, and perfect for your standalone Spark cluster in Docker Compose.
+If you ever need cluster mode, just change it to cluster here (or via Extra JSON).
+Spark Binary (showing default "spark_submit")
+This is the command Airflow uses to submit jobs.
+    • Default: spark-submit (or sometimes shown as "spark_submit") 
+    • In your custom image (from the Dockerfile I provided), spark-submit is already in $PATH (via ENV PATH=${SPARK_HOME}/bin:${PATH}). 
+You usually don't need to change this. It will automatically use the spark-submit from /opt/spark/bin/.
+If for some reason it's not found, you can override it in the connection's Extra field:
+JSON
+{
+  "spark_binary": "spark-submit"
+}
+(or full path: /opt/spark/bin/spark-submit)
+Full Recommended Connection (via UI or Environment Variable)
+In Airflow UI (Admin → Connections → Create):
+    • Conn Id: spark_default 
+    • Conn Type: Spark 
+    • Host: spark://spark-master 
+    • Port: 7077 
+    • Deploy Mode: client (default) 
+    • (Leave Spark Binary blank or spark-submit) 
+Extra (optional JSON – only if you need overrides):
+JSON
+{
+  "queue": "default",
+  "deploy_mode": "client",
+  "spark_binary": "spark-submit"
+}
+Or via environment variable (in docker-compose under airflow-common environment):
+YAML
+AIRFLOW_CONN_SPARK_DEFAULT: 'spark://spark-master:7077?deploy_mode=client'
+Example DAG Usage
+Python
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+spark_task = SparkSubmitOperator(
+    task_id="my_spark_job",
+    application="/opt/airflow/sparkFiles/apps/my_job.py",  # mounted volume
+    conn_id="spark_default",  # optional if using default
+    conf={"spark.executor.memory": "4g"},
+    jars="/opt/airflow/sparkFiles/jars/my-jdbc.jar",
+)
+
+
+
+
+---
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      HOST_UID: ${AIRFLOW_UID:-50000}
+      HOST_GID: ${AIRFLOW_GID:-0}
+  image: airflow-custom:2.11.0-spark
+
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Karachi
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__TIMER_UNIT_CONSISTENCY: 'true'
+    AIRFLOW__SCHEDULER__STANDALONE_DAG_PROCESSOR: 'true'
+
+    AIRFLOW__CORE__PARALLELISM: '40'
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '16'
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: '4'
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: '120.0'
+    AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: '180'
+
+    AIRFLOW__WEBSERVER__WORKERS: '4'
+    AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: '300'
+
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: '12'
+
+    FLASK_LIMITER_STORAGE_URL: redis://:@redis:6379/0
+
+    # Pre-configured Spark connection (client mode)
+    AIRFLOW_CONN_SPARK_DEFAULT: 'spark://spark-master:7077?deploy_mode=client'
+
+  volumes:
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/airflow/scripts
+    - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/airflow/sparkFiles
+
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - airflow_network
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    ports:
+      - "5438:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+    networks:
+      - airflow_network
+
+  redis:
+    image: redis:7.2-bookworm
+    command: redis-server --maxmemory 3gb --maxmemory-policy allkeys-lru --appendonly yes
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+    networks:
+      - airflow_network
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 8G
+        reservations:
+          cpus: '1.5'
+          memory: 4G
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 3G
+        reservations:
+          cpus: '0.8'
+          memory: 1.5G
+
+  # Only 2 Celery workers – each gets more resources
+  airflow-worker-1:
+    <<: *airflow-common
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'    # 16 cores total across 2 workers
+          memory: 24G    # 48G total across 2 workers
+        reservations:
+          cpus: '7.0'
+          memory: 20G
+
+  airflow-worker-2:
+    <<: *airflow-common
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 24G
+        reservations:
+          cpus: '7.0'
+          memory: 20G
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    deploy:
+      resources:
+        limits:
+          cpus: '0.8'
+          memory: 1G
+        reservations:
+          cpus: '0.4'
+          memory: 0.5G
+
+  spark-master:
+    image: apache/spark:3.5.3-scala2.12-java11-python3-ubuntu
+    container_name: spark-master
+    hostname: spark-master
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+      - "4040:4040"
+    environment:
+      - SPARK_MODE=master
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/sparkFiles
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '1.0'
+          memory: 3G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - airflow_network
+
+  spark-worker-1:
+    image: apache/spark:3.5.3-scala2.12-java11-python3-ubuntu
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_WORKER_CORES=8
+      - SPARK_WORKER_MEMORY=20g
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/sparkFiles
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    deploy:
+      resources:
+        limits:
+          cpus: '9.0'
+          memory: 26G
+        reservations:
+          cpus: '7.0'
+          memory: 22G
+    ports:
+      - "8081:8081"
+    networks:
+      - airflow_network
+
+  spark-worker-2:
+    image: apache/spark:3.5.3-scala2.12-java11-python3-ubuntu
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_WORKER_CORES=8
+      - SPARK_WORKER_MEMORY=20g
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/sparkFiles
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    deploy:
+      resources:
+        limits:
+          cpus: '9.0'
+          memory: 26G
+        reservations:
+          cpus: '7.0'
+          memory: 22G
+    ports:
+      - "8082:8081"
+    networks:
+      - airflow_network
+
+networks:
+  airflow_network:
+    driver: bridge
+
+volumes:
+  postgres-db-volume:
+
+----Dockerfile custom image
+
+# ============================
+# Airflow + Spark Custom Image
+# Base: Apache Airflow 2.11.0 (Python 3.9)
+# ============================
+FROM apache/airflow:2.11.0-python3.9
+
+# Build arguments for UID/GID alignment with host
+ARG HOST_UID=50000
+ARG HOST_GID=0
+
+# Switch to root for system installations
+USER root
+
+# -----------------------------
+# 1. System Dependencies
+# -----------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Core utilities
+        curl \
+        ca-certificates \
+        procps \
+        iproute2 \
+        net-tools \
+        # ODBC & FreeTDS for SQL Server
+        unixodbc \
+        unixodbc-dev \
+        freetds-dev \
+        freetds-bin \
+        freetds-common \
+        libsybdb5 \
+        tdsodbc \
+        # Java for Spark
+        openjdk-17-jre-headless \
+        # Build tools (for some Python wheels if needed)
+        build-essential \
+        gcc \
+        g++ && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# -----------------------------
+# 2. Microsoft ODBC Driver 17 for SQL Server (recommended over FreeTDS for modern MSSQL)
+# -----------------------------
+RUN curl -sSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl -sSL https://packages.microsoft.com/config/debian/12/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && \
+    ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql17 mssql-tools18 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> /etc/profile.d/mssql-tools.sh
+
+# -----------------------------
+# 3. Configure FreeTDS (fallback/legacy support)
+# -----------------------------
+RUN echo "[FreeTDS]\n\
+Description = FreeTDS Driver\n\
+Driver = /usr/lib/x86_64-linux-gnu/odbc/libtdsodbc.so\n\
+Setup = /usr/lib/x86_64-linux-gnu/odbc/libtdsS.so\n\
+UsageCount = 1" >> /etc/odbcinst.ini
+
+RUN echo "[global]\n\
+tds version = 7.4\n\
+client charset = UTF-8\n\
+text size = 20971520" > /etc/freetds/freetds.conf
+
+# -----------------------------
+# 4. Install Spark Client (for SparkSubmitOperator)
+# -----------------------------
+ARG SPARK_VERSION=3.5.3
+ARG HADOOP_VERSION=hadoop3
+
+ENV SPARK_HOME=/opt/spark
+ENV PATH=${SPARK_HOME}/bin:${SPARK_HOME}/sbin:${PATH}
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+RUN curl -fSL "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz" \
+        -o /tmp/spark.tgz && \
+    tar -xzf /tmp/spark.tgz -C /opt && \
+    mv "/opt/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}" "${SPARK_HOME}" && \
+    rm /tmp/spark.tgz && \
+    chmod -R 755 ${SPARK_HOME}
+
+# Allow Spark to pick up JDBC drivers from mounted volume
+ENV SPARK_CLASSPATH=/opt/airflow/sparkFiles/jars/*
+
+# -----------------------------
+# 5. Create/Align Airflow User with Host UID/GID
+# -----------------------------
+RUN if [ "${HOST_GID}" != "0" ]; then \
+        groupmod -g ${HOST_GID} airflow || groupadd -g ${HOST_GID} airflow; \
+    fi && \
+    usermod -u ${HOST_UID} -g ${HOST_GID:-0} airflow || \
+    useradd -u ${HOST_UID} -g ${HOST_GID:-0} -m airflow
+
+# Ensure airflow user owns necessary directories
+RUN chown -R airflow:0 /opt/airflow && \
+    chmod -R g+rwX /opt/airflow
+
+# -----------------------------
+# 6. Switch to Airflow User
+# -----------------------------
+USER airflow
+
+# -----------------------------
+# 7. Python Dependencies
+# -----------------------------
+# Copy requirements early for better layer caching
+COPY --chown=airflow:0 requirements.txt /opt/airflow/requirements.txt
+
+# Optional: Add extra Python path for your scripts
+
+
+ARG PYTHONPATH
+ENV PYTHONPATH=/opt/airflow/scripts${PYTHONPATH:+:$PYTHONPATH}
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --timeout=1000 -r /opt/airflow/requirements.txt
+
+# -----------------------------
+# 8. Final Cleanup & Verification
+# -----------------------------
+RUN spark-submit --version > /dev/null 2>&1 || echo "Spark not installed properly" && \
+    python -c "import pyodbc; print('pyodbc OK')" || echo "pyodbc missing"
+
+# Set default command (overridden by docker-compose)
+CMD ["airflow", "version"]
+
+
+
+----requirement.txt update if needed
+# Core Airflow providers
+apache-airflow-providers-apache-spark==4.9.0
+apache-airflow-providers-microsoft-mssql==3.7.0
+apache-airflow-providers-odbc==4.1.0
+apache-airflow-providers-celery==3.8.0
+apache-airflow-providers-postgres==5.11.0
+
+# Database drivers
+pyodbc>=5.1.0
+pandas>=2.0
+sqlalchemy>=2.0
+
+# Optional: for better SQL Server support
+pymssql>=2.2.11
+
+# Your internal packages (if any)
+# git+https://your-repo/internal-lib.git
+
+
+docker compose down
+docker compose up -d --build

@@ -424,7 +424,8 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/spark-data
+      - ${AIRFLOW_PROJ_DIR:-.}/sparkFiles:/opt/airflow/sparkFiles
+      - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
       - ${AIRFLOW_PROJ_DIR:-.}:/workspace
     deploy:
       resources:
@@ -452,6 +453,3 @@ networks:
     #     - subnet: 192.168.65.0/24
 volumes:
   postgres-db-volume:
-  spark-master-data:
-  spark-worker-1-data:
-  spark-worker-2-data:

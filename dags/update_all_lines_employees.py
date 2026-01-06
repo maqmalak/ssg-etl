@@ -136,18 +136,18 @@ def update_all_lines_employees():
 
         sql = """
             SELECT
-                INA_ID AS EM_Key,
+                ID AS EM_Key,
                 Title AS EM_FirstName,
                 FatherName AS EM_LastName,
-                Latest_Line_ID AS EM_Department,
-                ID AS EM_SSN,
+                Line_Desc AS EM_Department,
+                EMP_ID AS EM_SSN,
                 ActiveStatus,
                 joindate AS EM_JoinDate,
                 ResignDate AS EM_ResignDate,
                 NIC as EM_NIC,
-                gender AS EM_Gender
+                Gender AS EM_Gender
             FROM dbo.hangerline_emp
-            WHERE INA_ID IS NOT NULL
+            WHERE ID IS NOT NULL
         """
 
         with pyodbc.connect(conn_str, timeout=30) as cnxn:
@@ -219,7 +219,7 @@ def update_all_lines_employees():
                     EM_DateHired = S.EM_DateHired,
                     EM_TerminationDate = S.EM_TerminationDate,
                     EM_Sex = S.EM_Gender,
-                    EM_Resigned = S.EM_ActiveStatus
+                    EM_Resigned = CASE WHEN S.EM_ActiveStatus='1' THEN 0 ELSE 1 END
 
             WHEN NOT MATCHED THEN
                 INSERT (EM_Key, EM_FirstName, EM_LastName, EM_Department, EM_SSN, EM_ID, EM_DateHired, EM_TerminationDate,EM_Resigned,EM_Sex)

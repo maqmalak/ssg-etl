@@ -280,13 +280,13 @@ def create_spark_session():
         traceback.print_exc()
         raise
 
-def check_for_recent_data(spark: SparkSession = None, days: int = 30) -> int:
+def check_for_recent_data(spark: SparkSession = None, days: int = 1) -> int:
     """
     Check if there's recent data in pmr_production_data table to process using Spark cluster.
     
     Args:
         spark: SparkSession instance (optional, will create if not provided)
-        days: Number of days to look back for recent data (default: 30)
+        days: Number of days to look back for recent data (default: 1)
     
     Returns:
         int: Number of recent records found
@@ -349,9 +349,16 @@ def check_for_recent_data(spark: SparkSession = None, days: int = 30) -> int:
 
 
 
-def transform_data(spark):
+def transform_data(spark: SparkSession = None, days: int = 1):
     """Transform data to create aggregated tables"""
+    spark_created = False
     try:
+        # Create Spark session if not provided
+        if spark is None:
+            print("Creating Spark session for data transformation...")
+            spark = create_spark_session()
+            spark_created = True
+
         print("Starting data transformation...")
         
         # Get SOURCE database connection parameters (INA-7A) for reading data
@@ -405,7 +412,7 @@ def transform_data(spark):
         df = None
         row_count = 0
         # "odpd_key","odp_key","odp_em_key","odp_em_firstname","p_date","shift","source_connection","hanger_start_time","hanger_conplete_time","oc_key","oc_ob_id","oc_description","st_key","st_id","st_description","cm_code","cm_description","sm_code","sm_description","odpd_quantity","fg_item_key","odpd_workstation","odpd_wc_key","odpd_current_station","oc_actual_time","oc_standard_time","ppd_efficiency","ppd_tvwh"
-        query = """
+        query = f"""
            (
             SELECT
                 odp.ppd_key::text AS odpd_key,
@@ -448,7 +455,7 @@ def transform_data(spark):
                 odp.ppd_efficiency::float AS efficiency,
                 odp.ppd_tvwh::float AS ppd_tvwh
             FROM pmr_production_data AS odp
-            WHERE odp.ppd_date >= CURRENT_DATE - INTERVAL '30 days'
+            WHERE odp.ppd_date >= CURRENT_DATE - INTERVAL '{days} days'
             ORDER BY
                 ppd_complete_time NULLS LAST
             ) t
@@ -603,8 +610,10 @@ def transform_data(spark):
                 except Exception:
                     pass
 
-            spark.stop()
-            print("Spark session stopped")
+            # Stop Spark session if we created it
+            if spark_created and spark is not None:
+                spark.stop()
+                print("Spark session stopped after data transformation")
         except:
             pass
 
@@ -759,7 +768,7 @@ if __name__ == "__main__":
     spark = None
     try:
         spark = create_spark_session()
-        success = transform_data(spark)
+        success = transform_data(spark, days=1)
         print(f"ETL process completed with success: {success}")
         sys.exit(0 if success else 1)
     except Exception as e:

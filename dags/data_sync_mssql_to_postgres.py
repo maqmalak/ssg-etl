@@ -34,7 +34,7 @@ logger.setLevel(logging.INFO)
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    # "start_date": datetime(2025, 11, 5, 17, 0, tzinfo=PKT),
+    # "start_date": datetime(2026, 1, 1, 17, 0, tzinfo=PKT),
     "start_date":datetime.now(PKT) - timedelta(minutes=30),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
@@ -51,7 +51,7 @@ with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'creat
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["StyleBasicInformation","LoadingInformation","OperationInformation","hangerline_emp","Article"]
+INCLUDED_VIEWS = ["ClientPurchaseOrder","LoadingInformation","OperationInformation","hangerline_emp"]
 
 TARGETS = [
     {"table": "OperationInformation",        "group": ["odp_date", "oc_description", "source_connection"], "pk": ["odp_date", "oc_description", "source_connection"]},
@@ -151,8 +151,8 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 @dag(
     dag_id="data_sync_mssql_to_postgres",
     default_args=default_args,
-    schedule="*/30 8-23,0-1 * * 1-6",  # Every 30 min Mon–Sat, 8AM–2AM PKT
-    tags=["mssql", "postgres", "ssg", "sync"],
+    schedule='0 2 * * *',  # Run daily at 2 AM
+    tags=["ERP-To-HangerLines", "SilverStr", "ssg", "sync"],
     max_active_runs=1,
 )
 def data_sync_mssql_to_postgres():
@@ -370,7 +370,7 @@ def data_sync_mssql_to_postgres():
     # ---------------------------------------------------------------- #
     src = source_check()
     tgt = target_check()
-    views = create_views()
+    # views = create_views()
     tables = list_tables()
 
     # Create the load tasks but control execution based on whether the table exists
@@ -383,7 +383,7 @@ def data_sync_mssql_to_postgres():
         results >> summary
 
     # Ensure source_check runs before target_check as requested: source_check >> target_check
-    [src >>  tgt >>  views >> tables] >> tg 
+    [src >>  tgt >>  tables] >> tg 
     tg >> end
 
 

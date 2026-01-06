@@ -68,7 +68,7 @@ class QualityControlRepair(Base):
         # Composite index for common query patterns
         Index('idx_qcr_source_connection_defect_datetime', 'source_connection', 'qcr_date'),
         # Add a unique constraint on qcr_key to prevent duplicates
-        UniqueConstraint('qcr_key', 'source_connection',name='uq_qcr_key')
+        UniqueConstraint('qcr_key', 'source_connection','qcr_date',name='uq_qcr_key')
     )
 
 

@@ -10,8 +10,6 @@ dags/_pycache_/*
 .cfg
 pkg.txt
 # Airflow
-airflow.cfg
-airflow.db
 *.err
 *.out
 *.log
@@ -29,4 +27,3 @@ airflow.db
 htmlcov/
 .tox/
 .nox/
-sparkFiles/app-*

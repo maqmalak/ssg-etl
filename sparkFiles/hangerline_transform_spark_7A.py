@@ -280,14 +280,17 @@ def create_spark_session():
         traceback.print_exc()
         raise
 
-def check_for_recent_data(spark: SparkSession = None, days: int = 1) -> int:
+def check_for_recent_data(spark: SparkSession = None, last_extract_dt=None, days: int = 1) -> int:
     """
     Check if there's recent data in pmr_production_data table to process using Spark cluster.
-    
+
     Args:
         spark: SparkSession instance (optional, will create if not provided)
-        days: Number of days to look back for recent data (default: 1)
-    
+        last_extract_dt: Last extract datetime from ETL log (optional)
+                        If provided, checks for data since this datetime
+        days: Number of days to look back for recent data (default: 1, used if last_extract_dt is None)
+             If days > 5000, counts all records in the table (full table mode)
+
     Returns:
         int: Number of recent records found
     """
@@ -298,22 +301,48 @@ def check_for_recent_data(spark: SparkSession = None, days: int = 1) -> int:
             print("Creating Spark session for data check...")
             spark = create_spark_session()
             spark_created = True
-        
+
         # Get source connection parameters (INA-7A)
         print("Getting source database connection (INA-7A)...")
         source_conn = get_postgres_source_connection()
-        
-        # Build query to check for recent data
-        query = f"""
-        (
-            SELECT COUNT(*) as record_count 
-            FROM pmr_production_data 
-            WHERE ppd_date >= CURRENT_DATE - INTERVAL '{days} days'
-        ) t
-        """
-        
-        print(f"Checking for data in last {days} days using Spark cluster...")
-        
+
+        # Build query based on last_extract_dt or days parameter
+        if last_extract_dt is not None:
+            # Use last extract datetime from ETL log
+            # Format datetime for SQL query
+            if hasattr(last_extract_dt, 'strftime'):
+                last_extract_str = last_extract_dt.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                last_extract_str = str(last_extract_dt)
+
+            query = f"""
+            (
+                SELECT COUNT(*) as record_count
+                FROM pmr_production_data
+                WHERE ppd_complete_time >= '{last_extract_str}'::timestamp
+            ) t
+            """
+            print(f"📅 Checking for data since last extract ({last_extract_str}) using Spark cluster...")
+        elif days > 5000:
+            # Full table mode - count all records
+            query = """
+            (
+                SELECT COUNT(*) as record_count
+                FROM pmr_production_data
+            ) t
+            """
+            print("🔄 Checking FULL TABLE: Counting all records in pmr_production_data...")
+        else:
+            # Date-filtered mode (fallback to days-based filtering)
+            query = f"""
+            (
+                SELECT COUNT(*) as record_count
+                FROM pmr_production_data
+                WHERE ppd_complete_time >= CURRENT_DATE - INTERVAL '{days} days'
+            ) t
+            """
+            print(f"📅 Checking for data in last {days} days using Spark cluster...")
+
         # Read data using Spark JDBC
         count_df = spark.read \
             .format("jdbc") \
@@ -323,15 +352,20 @@ def check_for_recent_data(spark: SparkSession = None, days: int = 1) -> int:
             .option("password", source_conn["password"]) \
             .option("driver", "org.postgresql.Driver") \
             .load()
-        
+
         # Get the count
         count = count_df.first()["record_count"]
-        
-        print(f"✓ Found {count:,} recent records in pmr_production_data table (via Spark)")
+
+        if last_extract_dt is not None:
+            print(f"✓ Found {count:,} records in pmr_production_data since last extract (via Spark)")
+        elif days > 360:
+            print(f"✓ Found {count:,} total records in pmr_production_data table (full table mode)")
+        else:
+            print(f"✓ Found {count:,} recent records in pmr_production_data table (via Spark)")
         return count
-        
+
     except Exception as e:
-        print(f"✗ Error checking for recent data: {e}")
+        print(f"✗ Error checking for data: {e}")
         import traceback
         traceback.print_exc()
         return 0
@@ -345,12 +379,8 @@ def check_for_recent_data(spark: SparkSession = None, days: int = 1) -> int:
                 pass
 
 
-
-
-
-
-def transform_data(spark: SparkSession = None, days: int = 1):
-    """Transform data to create aggregated tables"""
+def transform_data(spark: SparkSession = None, last_extract_dt=None, days: int = 1, chunked: bool = True):
+    """Transform data to create aggregated tables with chunked processing for large datasets"""
     spark_created = False
     try:
         # Create Spark session if not provided
@@ -360,7 +390,7 @@ def transform_data(spark: SparkSession = None, days: int = 1):
             spark_created = True
 
         print("Starting data transformation...")
-        
+
         # Get SOURCE database connection parameters (INA-7A) for reading data
         print("Getting SOURCE database connection parameters (INA-7A)...")
         try:
@@ -369,7 +399,7 @@ def transform_data(spark: SparkSession = None, days: int = 1):
         except Exception as e:
             print(f"Error getting source connection params: {e}")
             raise
-        
+
         # Get TARGET database connection parameters (pg-ssg) for writing data
         print("Getting TARGET database connection parameters (pg-ssg)...")
         try:
@@ -378,11 +408,11 @@ def transform_data(spark: SparkSession = None, days: int = 1):
         except Exception as e:
             print(f"Error getting target connection params: {e}")
             raise
-        
+
         # Use SOURCE connection for reading data
         source_jdbc_properties = get_postgres_jdbc_properties(source_connection_params)
         source_jdbc_url = source_connection_params["jdbc_url"]
-        
+
         # Print SOURCE connection details (without password for security)
         print("=" * 80)
         print("SOURCE Connection (INA-7A) - Reading Data From:")
@@ -399,202 +429,19 @@ def transform_data(spark: SparkSession = None, days: int = 1):
         print(f"  User: {target_connection_params['user']}")
         print(f"  JDBC URL: {target_connection_params['jdbc_url']}")
         print("=" * 80)
-        
+
         # Debug: Print Spark configuration
         print("Spark configuration:")
         for item in spark.sparkContext.getConf().getAll():
             print(f"  {item[0]}: {item[1]}")
-        
-        # Read data from PostgreSQL using single-connection method (most reliable)
-        # Parallel partitioning removed due to persistent EOFException errors
-        print("Reading data from PostgreSQL with single-connection method...")
-        
-        df = None
-        row_count = 0
-        # "odpd_key","odp_key","odp_em_key","odp_em_firstname","p_date","shift","source_connection","hanger_start_time","hanger_conplete_time","oc_key","oc_ob_id","oc_description","st_key","st_id","st_description","cm_code","cm_description","sm_code","sm_description","odpd_quantity","fg_item_key","odpd_workstation","odpd_wc_key","odpd_current_station","oc_actual_time","oc_standard_time","ppd_efficiency","ppd_tvwh"
-        query = f"""
-           (
-            SELECT
-                odp.ppd_key::text AS odpd_key,
-                odp.ppd_hei_key::text AS odp_key,
-                CASE 
-                    WHEN odp.ppd_hei_code ~ '^[0-9]+$' THEN odp.ppd_hei_code::int 
-                    ELSE NULL 
-                END AS odp_em_key,
-                odp.ppd_hei_name::text AS em_firstname,
-                COALESCE(odp.ppd_p_date,odp.ppd_date)::date AS odp_date,
-                odp.ppd_p_shift::text AS shift,
-                CASE
-                    WHEN LEFT(odp.ppd_bls_code, 2) = '10' THEN 'line-30'::text
-                    WHEN LEFT(odp.ppd_bls_code, 2) = '11' THEN 'line-21'::text
-                    WHEN LEFT(odp.ppd_bls_code, 2) = '12' THEN 'line-32'::text
-                    ELSE odp.ppd_bls_code::text
-                END AS source_connection,
-                ppd_start_time::timestamp AS odp_first_hanger_time,
-                ppd_complete_time::timestamp AS odp_last_hanger_time,
-                odp.ppd_poi_code::text AS odpd_oc_key,
-                odp.ppd_poi_name::text AS oc_description,
-                odp.ppd_psi_key::text AS odpd_st_key,
-                odp.ppd_psi_code::text AS st_id,
-                odp.ppd_psi_name::text AS st_description,
-                odp.ppd_pci_code::text AS odpd_cm_key,
-                odp.ppd_pci_name::text AS cm_description,
-                odp.ppd_psz_code::text AS odpd_sm_key,
-                odp.ppd_psz_name::text AS sm_description,
-                odp.ppd_quantity::numeric AS odpd_quantity,
-                CASE WHEN odp.ppd_poi_name = 'Loading/Panel Segregation' THEN 
-                    odp.ppd_quantity::numeric ELSE 0 END AS loading_qty,
-                CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN 
-                    odp.ppd_quantity::numeric ELSE 0 END AS unloading_qty,
 
-                odp.ppd_bls_code::text AS odpd_workstation,
-                LEFT(odp.ppd_bls_code, 2)::numeric AS odpd_wc_key,
-                odp.ppd_bls_name::text AS odp_current_station,
-                odp.ppd_total_timeconsuming::float AS odpd_actual_time,
-                odp.ppd_standard_time::float AS oc_standard_time,
-                odp.ppd_efficiency::float AS efficiency,
-                odp.ppd_tvwh::float AS ppd_tvwh
-            FROM pmr_production_data AS odp
-            WHERE odp.ppd_date >= CURRENT_DATE - INTERVAL '{days} days'
-            ORDER BY
-                ppd_complete_time NULLS LAST
-            ) t
-        """
-        
-        # Primary method: Single-connection read with optimized settings from SOURCE database
-        try:
-            print("Reading from SOURCE database (INA-7A) with optimized fetch size and timeouts...")
-            
-            df = spark.read \
-                .format("jdbc") \
-                .option("url", source_jdbc_url) \
-                .option("dbtable", query) \
-                .option("user", source_jdbc_properties["user"]) \
-                .option("password", source_jdbc_properties["password"]) \
-                .option("driver", "org.postgresql.Driver") \
-                .option("fetchsize", "5000") \
-                .option("queryTimeout", "600") \
-                .option("connectTimeout", "60") \
-                .load()
-            
-            # Persist and count
-            df = df.persist(StorageLevel.MEMORY_AND_DISK)
-            row_count = df.count()
-            
-            print(f"✓ Data loaded successfully with single connection. Row count: {row_count:,}")
-            
-        except Exception as primary_error:
-            print(f"⚠ Primary read failed: {primary_error}")
-            print("Attempting fallback without explicit driver...")
-            
-            # Fallback: Let Spark auto-detect the driver from SOURCE database
-            try:
-                df = spark.read \
-                    .format("jdbc") \
-                    .option("url", source_jdbc_url) \
-                    .option("dbtable", query) \
-                    .option("user", source_jdbc_properties["user"]) \
-                    .option("password", source_jdbc_properties["password"]) \
-                    .option("fetchsize", "5000") \
-                    .option("queryTimeout", "600") \
-                    .load()
-                
-                df = df.persist(StorageLevel.MEMORY_AND_DISK)
-                row_count = df.count()
-                
-                print(f"✓ Data loaded with auto-driver detection. Row count: {row_count:,}")
-                
-            except Exception as fallback_error:
-                print(f"✗ All read attempts failed: {fallback_error}")
-                import traceback
-                traceback.print_exc()
-                return {
-                    "success": False,
-                    "data_loaded": 0,
-                    "data_filtered": 0,
-                    "tables_processed": [],
-                    "message": f"Failed to read data from PostgreSQL: {str(fallback_error)}"
-                }
-        
-        # Dynamic shuffle partition calculation based on data size
-        if row_count > 0:
-            optimal_partitions = max(50, min(200, row_count // 10000))
-            spark.conf.set("spark.sql.shuffle.partitions", str(optimal_partitions))
-            print(f"✓ Adjusted shuffle partitions to {optimal_partitions} based on data size ({row_count:,} rows)")
-        
-        # Check if table exists and has data (row_count already computed in the primary read path)
-        # If we ended up in fallback read path, compute it once here.
-        if 'row_count' not in locals():
-            try:
-                df = df.persist(StorageLevel.MEMORY_AND_DISK)
-                row_count = df.count()
-            except Exception as e:
-                print(f"Error counting rows: {str(e)}")
-                row_count = 0
-            
-        if row_count == 0:
-            print("Warning: No data found in operator_daily_performance table for the last day")
-            return True
-            
-        # Process data using TARGETS configuration
-        print("Processing data using TARGETS configuration...")
-        tables_processed = []
-        try:
-            for cfg in TARGETS:
-                print(f"Processing target table: {cfg['table']}")
+        if chunked:
+            # Use chunked processing for large datasets
+            return transform_data_chunked(spark, source_connection_params, target_connection_params, last_extract_dt, days)
+        else:
+            # Use original single-query approach (for smaller datasets)
+            return transform_data_single(spark, source_connection_params, target_connection_params, last_extract_dt, days)
 
-       
-                df_to_process = df
-
-
-
-                # Perform upsert for this target (using TARGET connection)
-                success = upsert_data_via_spark(
-                    spark=spark,
-                    data_df=df_to_process,
-                    table_name=cfg["table"],
-                    key_columns=cfg["pk"],
-                    connection_params=target_connection_params
-                )
-
-                if not success:
-                    print(f"Failed to upsert data to {cfg['table']}")
-                    return {
-                        "success": False,
-                        "data_loaded": row_count,
-                        "data_filtered": row_count,
-                        "tables_processed": tables_processed,
-                        "message": f"Failed to upsert data to {cfg['table']}"
-                    }
-
-                tables_processed.append({
-                    "table": cfg["table"],
-                    "records": row_count if row_count is not None else "(count disabled)"
-                })
-
-                if row_count is not None:
-                    print(f"Successfully upserted {row_count} records to {cfg['table']} table")
-                else:
-                    print(f"Successfully upserted records to {cfg['table']} table (count disabled)")
-
-        except Exception as e:
-            print(f"Error processing data with TARGETS: {str(e)}")
-            return {
-                "success": False,
-                "data_loaded": row_count,
-                "data_filtered": row_count,
-                "tables_processed": tables_processed,
-                "message": f"Error processing data: {str(e)}"
-            }
-
-        return {
-            "success": True,
-            "data_loaded": row_count,
-            "data_filtered": row_count,
-            "tables_processed": tables_processed,
-            "message": "Data transformation completed successfully"
-        }
-        
     except Exception as e:
         print(f"Error in data transformation: {str(e)}")
         import traceback
@@ -603,19 +450,563 @@ def transform_data(spark: SparkSession = None, days: int = 1):
         return False
     finally:
         try:
-            # Unpersist if we cached the main df
-            if 'df' in locals():
-                try:
-                    df.unpersist(blocking=False)
-                except Exception:
-                    pass
-
             # Stop Spark session if we created it
             if spark_created and spark is not None:
                 spark.stop()
                 print("Spark session stopped after data transformation")
         except:
             pass
+
+
+def transform_data_single(spark: SparkSession, source_connection_params: dict, target_connection_params: dict, last_extract_dt=None, days: int = 1):
+    """Original single-query data transformation (for smaller datasets)"""
+    print("Using single-query processing approach...")
+
+    # Use SOURCE connection for reading data
+    source_jdbc_properties = get_postgres_jdbc_properties(source_connection_params)
+    source_jdbc_url = source_connection_params["jdbc_url"]
+
+    # Read data from PostgreSQL using single-connection method (most reliable)
+    # Parallel partitioning removed due to persistent EOFException errors
+    print("Reading data from PostgreSQL with single-connection method...")
+
+    df = None
+    row_count = 0
+
+    # Build query based on last_extract_dt or days parameter
+    if last_extract_dt is not None:
+        # Use last extract datetime from ETL log
+        # Format datetime for SQL query
+        if hasattr(last_extract_dt, 'strftime'):
+            last_extract_str = last_extract_dt.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            last_extract_str = str(last_extract_dt)
+        date_filter = f"WHERE odp.ppd_complete_time >= '{last_extract_str}'::timestamp"
+        print(f"📅 INCREMENTAL MODE: Processing data since last extract ({last_extract_str}) from pmr_production_data")
+    elif days > 365:
+        # Full table mode - remove date filter
+        date_filter = ""
+        print("🔄 FULL TABLE MODE: Processing all records from pmr_production_data")
+    else:
+        # Date-filtered mode (fallback)
+        date_filter = f"WHERE odp.ppd_complete_time >= CURRENT_DATE - INTERVAL '{days} days'"
+        print(f"📅 DATE FILTERED MODE: Processing last {days} days from pmr_production_data")
+
+    query = f"""
+       (
+        SELECT
+            odp.ppd_key::text AS odpd_key,
+            odp.ppd_hei_key::text AS odp_key,
+            CASE
+                WHEN odp.ppd_hei_code ~ '^[0-9]+$' THEN odp.ppd_hei_code::int
+                ELSE NULL
+            END AS odp_em_key,
+            odp.ppd_hei_name::text AS em_firstname,
+            COALESCE(odp.ppd_p_date,odp.ppd_date)::date AS odp_date,
+            odp.ppd_p_shift::text AS shift,
+            CASE
+                WHEN LEFT(odp.ppd_bls_code, 2) = '10' THEN 'line-30'::text
+                WHEN LEFT(odp.ppd_bls_code, 2) = '11' THEN 'line-21'::text
+                WHEN LEFT(odp.ppd_bls_code, 2) = '12' THEN 'line-32'::text
+                ELSE odp.ppd_bls_code::text
+            END AS source_connection,
+            ppd_start_time::timestamp AS odp_first_hanger_time,
+            ppd_complete_time::timestamp AS odp_last_hanger_time,
+            odp.ppd_poi_code::text AS odpd_oc_key,
+            odp.ppd_poi_name::text AS oc_description,
+            odp.ppd_psi_key::text AS odpd_st_key,
+            odp.ppd_psi_code::text AS st_id,
+            odp.ppd_psi_name::text AS st_description,
+            pwb.pwb_mixcode::text AS odpd_lot_number,
+            odp.ppd_pci_code::text AS odpd_cm_key,
+            odp.ppd_pci_name::text AS cm_description,
+            odp.ppd_psz_code::text AS odpd_sm_key,
+            odp.ppd_psz_name::text AS sm_description,
+            odp.ppd_quantity::numeric AS odpd_quantity,
+            CASE WHEN odp.ppd_poi_name = 'Loading/Panel Segregation' THEN
+                odp.ppd_quantity::numeric ELSE 0
+            END AS loading_qty,
+            CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN
+                odp.ppd_quantity::numeric ELSE 0
+            END AS unloading_qty,
+            odp.ppd_bls_code::text AS odpd_workstation,
+            LEFT(odp.ppd_bls_code, 2)::numeric AS odpd_wc_key,
+            odp.ppd_bls_name::text AS odp_current_station,
+            odp.ppd_total_timeconsuming::float AS odpd_actual_time,
+            odp.ppd_standard_time::float AS oc_standard_time,
+            odp.ppd_efficiency::float AS efficiency,
+            odp.ppd_tvwh::float AS ppd_tvwh
+        FROM pmr_production_data AS odp
+        LEFT JOIN pm_work_bill pwb on pwb.pwb_key=odp.ppd_pwb_key
+        {date_filter}
+        ORDER BY
+            ppd_complete_time NULLS LAST
+        ) t
+    """
+
+    # Primary method: Single-connection read with optimized settings from SOURCE database
+    try:
+        print("Reading from SOURCE database (INA-7A) with optimized fetch size and timeouts...")
+
+        df = spark.read \
+            .format("jdbc") \
+            .option("url", source_jdbc_url) \
+            .option("dbtable", query) \
+            .option("user", source_jdbc_properties["user"]) \
+            .option("password", source_jdbc_properties["password"]) \
+            .option("driver", "org.postgresql.Driver") \
+            .option("fetchsize", "5000") \
+            .option("queryTimeout", "1200") \
+            .option("connectTimeout", "120") \
+            .load()
+
+        # Persist and count
+        df = df.persist(StorageLevel.MEMORY_AND_DISK)
+        row_count = df.count()
+
+        print(f"✓ Data loaded successfully with single connection. Row count: {row_count:,}")
+
+    except Exception as primary_error:
+        print(f"⚠ Primary read failed: {primary_error}")
+        print("Attempting fallback without explicit driver...")
+
+        # Fallback: Let Spark auto-detect the driver from SOURCE database
+        try:
+            df = spark.read \
+                .format("jdbc") \
+                .option("url", source_jdbc_url) \
+                .option("dbtable", query) \
+                .option("user", source_jdbc_properties["user"]) \
+                .option("password", source_jdbc_properties["password"]) \
+                .option("fetchsize", "5000") \
+                .option("queryTimeout", "1200") \
+                .load()
+
+            df = df.persist(StorageLevel.MEMORY_AND_DISK)
+            row_count = df.count()
+
+            print(f"✓ Data loaded with auto-driver detection. Row count: {row_count:,}")
+
+        except Exception as fallback_error:
+            print(f"✗ All read attempts failed: {fallback_error}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "data_loaded": 0,
+                "data_filtered": 0,
+                "tables_processed": [],
+                "message": f"Failed to read data from PostgreSQL: {str(fallback_error)}"
+            }
+
+    # Dynamic shuffle partition calculation based on data size
+    if row_count > 0:
+        optimal_partitions = max(50, min(200, row_count // 10000))
+        spark.conf.set("spark.sql.shuffle.partitions", str(optimal_partitions))
+        print(f"✓ Adjusted shuffle partitions to {optimal_partitions} based on data size ({row_count:,} rows)")
+
+    # Check if table exists and has data (row_count already computed in the primary read path)
+    # If we ended up in fallback read path, compute it once here.
+    if 'row_count' not in locals():
+        try:
+            df = df.persist(StorageLevel.MEMORY_AND_DISK)
+            row_count = df.count()
+        except Exception as e:
+            print(f"Error counting rows: {str(e)}")
+            row_count = 0
+
+    if row_count == 0:
+        print("Warning: No data found in pmr_production_data table")
+        return {
+            "success": True,
+            "data_loaded": 0,
+            "data_filtered": 0,
+            "tables_processed": [],
+            "message": "No data found to process"
+        }
+
+    # Process data using TARGETS configuration
+    print("Processing data using TARGETS configuration...")
+    tables_processed = []
+    try:
+        for cfg in TARGETS:
+            print(f"Processing target table: {cfg['table']}")
+
+
+            df_to_process = df
+
+
+
+            # Perform upsert for this target (using TARGET connection)
+            success = upsert_data_via_spark(
+                spark=spark,
+                data_df=df_to_process,
+                table_name=cfg["table"],
+                key_columns=cfg["pk"],
+                connection_params=target_connection_params
+            )
+
+            if not success:
+                print(f"Failed to upsert data to {cfg['table']}")
+                return {
+                    "success": False,
+                    "data_loaded": row_count,
+                    "data_filtered": row_count,
+                    "tables_processed": tables_processed,
+                    "message": f"Failed to upsert data to {cfg['table']}"
+                }
+
+            tables_processed.append({
+                "table": cfg["table"],
+                "records": row_count if row_count is not None else "(count disabled)"
+            })
+
+            if row_count is not None:
+                print(f"Successfully upserted {row_count} records to {cfg['table']} table")
+            else:
+                print(f"Successfully upserted records to {cfg['table']} table (count disabled)")
+
+    except Exception as e:
+        print(f"Error processing data with TARGETS: {str(e)}")
+        return {
+            "success": False,
+            "data_loaded": row_count,
+            "data_filtered": row_count,
+            "tables_processed": tables_processed,
+            "message": f"Error processing data: {str(e)}"
+        }
+
+    # Get the maximum ppd_complete_time from processed data for ETL logging
+    try:
+        max_complete_time = df.selectExpr("max(odp_last_hanger_time) as max_time").first()["max_time"]
+        print(f"📅 Maximum odp_last_hanger_time (ppd_complete_time) from processed data: {max_complete_time}")
+    except Exception as e:
+        print(f"⚠️ Could not get max odp_last_hanger_time: {e}")
+        max_complete_time = None
+
+    return {
+        "success": True,
+        "data_loaded": row_count,
+        "data_filtered": row_count,
+        "tables_processed": tables_processed,
+        "max_ppd_complete_time": max_complete_time,
+        "message": "Data transformation completed successfully"
+    }
+
+
+def transform_data_chunked(spark: SparkSession, source_connection_params: dict, target_connection_params: dict, last_extract_dt=None, days: int = 1):
+    """Chunked data transformation for large datasets to avoid timeouts"""
+    print("🔄 Using CHUNKED processing approach for large datasets...")
+
+    # Use SOURCE connection for reading data
+    source_jdbc_properties = get_postgres_jdbc_properties(source_connection_params)
+    source_jdbc_url = source_connection_params["jdbc_url"]
+
+    # Determine date range for chunking based on last_extract_dt
+    if last_extract_dt is not None:
+        # Calculate date difference between CURRENT_DATE and last_extract_dt
+        from datetime import datetime, date
+        current_date = date.today()
+        if hasattr(last_extract_dt, 'date'):
+            last_extract_date = last_extract_dt.date()
+        else:
+            # Assume it's already a date or can be converted
+            last_extract_date = last_extract_dt
+
+        # Calculate days difference
+        date_diff = (current_date - last_extract_date).days
+        print(f"📅 Last extract date: {last_extract_date}, Current date: {current_date}, Difference: {date_diff} days")
+
+        if date_diff > 365:
+            # Full table mode - too many days since last extract
+            print(f"🔄 FULL TABLE MODE: Date difference ({date_diff} days > 365) - processing all records")
+            date_range_query = """
+            (
+                SELECT
+                    MIN(ppd_p_date) as start_date,
+                    MAX(ppd_p_date) as end_date,
+                    COUNT(*) as total_records
+                FROM pmr_production_data
+            ) t
+            """
+            chunk_filter_logic = "full_table"  # Flag for full table processing
+        else:
+            # Incremental mode - use last_extract_dt for precise filtering
+            print(f"📅 INCREMENTAL MODE: Processing data since {last_extract_dt} ({date_diff} days ago)")
+            date_range_query = f"""
+            (
+                SELECT
+                    '{last_extract_date}'::date as start_date,
+                    CURRENT_DATE as end_date,
+                    COUNT(*) as total_records
+                FROM pmr_production_data
+                WHERE ppd_complete_time >= '{last_extract_dt}'::timestamp
+            ) t
+            """
+            chunk_filter_logic = "incremental"  # Flag for incremental processing
+    elif days > 5000:
+        print("🔄 FULL TABLE MODE: Processing all records from pmr_production_data using chunks (legacy days > 5000)")
+        # Get the full date range from the table
+        date_range_query = """
+        (
+            SELECT
+                MIN(ppd_p_date) as start_date,
+                MAX(ppd_p_date) as end_date,
+                COUNT(*) as total_records
+            FROM pmr_production_data
+        ) t
+        """
+        chunk_filter_logic = "full_table"
+    else:
+        print(f"📅 DATE FILTERED MODE: Processing last {days} days using chunks (legacy fallback)")
+        date_range_query = f"""
+        (
+            SELECT
+                (CURRENT_DATE - INTERVAL '{days} days') as start_date,
+                CURRENT_DATE as end_date,
+                COUNT(*) as total_records
+            FROM pmr_production_data
+            WHERE ppd_complete_time >= CURRENT_DATE - INTERVAL '{days} days'
+        ) t
+        """
+        chunk_filter_logic = "legacy_days"
+
+    try:
+        # Get date range and total count
+        range_df = spark.read \
+            .format("jdbc") \
+            .option("url", source_jdbc_url) \
+            .option("dbtable", date_range_query) \
+            .option("user", source_jdbc_properties["user"]) \
+            .option("password", source_jdbc_properties["password"]) \
+            .option("driver", "org.postgresql.Driver") \
+            .load()
+
+        range_data = range_df.first()
+        if not range_data:
+            print("No data found in date range")
+            return {
+                "success": True,
+                "data_loaded": 0,
+                "data_filtered": 0,
+                "tables_processed": [],
+                "message": "No data found to process"
+            }
+
+        start_date = range_data["start_date"]
+        end_date = range_data["end_date"]
+        total_records = range_data["total_records"]
+
+        print(f"📊 Total records to process: {total_records:,}")
+        print(f"📅 Date range: {start_date} to {end_date}")
+        print(f"📅 Date types: start_date={type(start_date)}, end_date={type(end_date)}")
+
+        # Force conversion to date objects to avoid datetime/date comparison issues
+        from datetime import date
+        try:
+            # Convert to date objects regardless of input type
+            if hasattr(start_date, 'date'):
+                start_date = start_date.date()
+            else:
+                start_date = date.fromisoformat(str(start_date).split(' ')[0])
+
+            if hasattr(end_date, 'date'):
+                end_date = end_date.date()
+            else:
+                end_date = date.fromisoformat(str(end_date).split(' ')[0])
+
+            print(f"📅 Converted date types: start_date={type(start_date)}, end_date={type(end_date)}")
+        except Exception as date_error:
+            print(f"⚠️ Date conversion error: {date_error}")
+            # Fallback: try to convert using different methods
+            try:
+                start_date = date.fromisoformat(str(start_date).split('T')[0].split(' ')[0])
+                end_date = date.fromisoformat(str(end_date).split('T')[0].split(' ')[0])
+                print(f"📅 Fallback converted date types: start_date={type(start_date)}, end_date={type(end_date)}")
+            except Exception as fallback_error:
+                print(f"✗ Date conversion failed: {fallback_error}")
+                raise
+
+        # Define chunk size (process ~5,000 records per chunk to avoid timeouts)
+        chunk_size_days = 1  # Process 1 days at a time
+        current_date = start_date
+        total_processed = 0
+        chunk_number = 1
+        max_complete_time_overall = None
+
+        # Process data in chunks
+        while current_date <= end_date:
+            chunk_end_date = min(current_date + timedelta(days=chunk_size_days), end_date)
+
+            print(f"🔄 Processing chunk {chunk_number}: {current_date} to {chunk_end_date}")
+
+            # Build chunk query based on processing mode
+            if chunk_filter_logic == "full_table":
+                # Full table mode - no WHERE clause, process all data in date range
+                chunk_where_clause = f"WHERE odp.ppd_complete_time >= '{current_date}' AND odp.ppd_complete_time < '{chunk_end_date + timedelta(days=1)}'"
+                print(f"  🔄 Full table chunk: Processing all records in date range")
+            elif chunk_filter_logic == "incremental":
+                # Incremental mode - use precise timestamp filtering
+                chunk_where_clause = f"WHERE odp.ppd_complete_time >= '{last_extract_dt}'::timestamp AND odp.ppd_complete_time >= '{current_date}' AND odp.ppd_complete_time < '{chunk_end_date + timedelta(days=1)}'"
+                print(f"  📅 Incremental chunk: Processing since {chunk_where_clause}")
+            else:
+                # Legacy mode fallback
+                chunk_where_clause = f"WHERE odp.ppd_complete_time >= '{current_date}' AND odp.ppd_complete_time < '{chunk_end_date + timedelta(days=1)}'"
+                print(f"  📅 Legacy chunk: Processing date range")
+
+            chunk_query = f"""
+            (
+                SELECT
+                    odp.ppd_key::text AS odpd_key,
+                    odp.ppd_hei_key::text AS odp_key,
+                    CASE
+                        WHEN odp.ppd_hei_code ~ '^[0-9]+$' THEN odp.ppd_hei_code::int
+                        ELSE NULL
+                    END AS odp_em_key,
+                    odp.ppd_hei_name::text AS em_firstname,
+                    COALESCE(odp.ppd_p_date,odp.ppd_date)::date AS odp_date,
+                    odp.ppd_p_shift::text AS shift,
+                    CASE
+                        WHEN LEFT(odp.ppd_bls_code, 2) = '10' THEN 'line-30'::text
+                        WHEN LEFT(odp.ppd_bls_code, 2) = '11' THEN 'line-21'::text
+                        WHEN LEFT(odp.ppd_bls_code, 2) = '12' THEN 'line-32'::text
+                        ELSE odp.ppd_bls_code::text
+                    END AS source_connection,
+                    ppd_start_time::timestamp AS odp_first_hanger_time,
+                    ppd_complete_time::timestamp AS odp_last_hanger_time,
+                    odp.ppd_poi_code::text AS odpd_oc_key,
+                    odp.ppd_poi_name::text AS oc_description,
+                    odp.ppd_psi_key::text AS odpd_st_key,
+                    odp.ppd_psi_code::text AS st_id,
+                    odp.ppd_psi_name::text AS st_description,
+                    pwb.pwb_mixcode::text AS odpd_lot_number,
+                    odp.ppd_pci_code::text AS odpd_cm_key,
+                    odp.ppd_pci_name::text AS cm_description,
+                    odp.ppd_psz_code::text AS odpd_sm_key,
+                    odp.ppd_psz_name::text AS sm_description,
+                    odp.ppd_quantity::numeric AS odpd_quantity,
+                    CASE WHEN odp.ppd_poi_name = 'Loading/Panel Segregation' THEN
+                        odp.ppd_quantity::numeric ELSE 0
+                    END AS loading_qty,
+                    CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN
+                        odp.ppd_quantity::numeric ELSE 0
+                    END AS unloading_qty,
+                    odp.ppd_bls_code::text AS odpd_workstation,
+                    LEFT(odp.ppd_bls_code, 2)::numeric AS odpd_wc_key,
+                    odp.ppd_bls_name::text AS odp_current_station,
+                    odp.ppd_total_timeconsuming::float AS odpd_actual_time,
+                    odp.ppd_standard_time::float AS oc_standard_time,
+                    odp.ppd_efficiency::float AS efficiency,
+                    odp.ppd_tvwh::float AS ppd_tvwh
+                FROM pmr_production_data AS odp
+                LEFT JOIN pm_work_bill pwb on pwb.pwb_key=odp.ppd_pwb_key
+                {chunk_where_clause}
+                ORDER BY ppd_complete_time NULLS LAST
+            ) t
+            """
+
+            try:
+                # Read chunk data
+                chunk_df = spark.read \
+                    .format("jdbc") \
+                    .option("url", source_jdbc_url) \
+                    .option("dbtable", chunk_query) \
+                    .option("user", source_jdbc_properties["user"]) \
+                    .option("password", source_jdbc_properties["password"]) \
+                    .option("driver", "org.postgresql.Driver") \
+                    .option("fetchsize", "5000") \
+                    .option("queryTimeout", "900") \
+                    .option("connectTimeout", "60") \
+                    .load()
+
+                chunk_df = chunk_df.persist(StorageLevel.MEMORY_AND_DISK)
+                chunk_count = chunk_df.count()
+
+                if chunk_count > 0:
+                    print(f"✓ Chunk {chunk_number}: Loaded {chunk_count:,} records")
+
+                    # Track max ppd_complete_time from this chunk
+                    try:
+                        chunk_max_time = chunk_df.selectExpr("max(odp_last_hanger_time) as max_time").first()["max_time"]
+                        if chunk_max_time:
+                            if max_complete_time_overall is None or chunk_max_time > max_complete_time_overall:
+                                max_complete_time_overall = chunk_max_time
+                        print(f"📅 Chunk {chunk_number} max odp_last_hanger_time (ppd_complete_time): {chunk_max_time}")
+                    except Exception as time_error:
+                        print(f"⚠️ Could not get max time for chunk {chunk_number}: {time_error}")
+
+                    # Process chunk data using TARGETS configuration
+                    for cfg in TARGETS:
+                        print(f"  → Upserting to {cfg['table']}...")
+
+                        success = upsert_data_via_spark(
+                            spark=spark,
+                            data_df=chunk_df,
+                            table_name=cfg["table"],
+                            key_columns=cfg["pk"],
+                            connection_params=target_connection_params
+                        )
+
+                        if not success:
+                            print(f"  ✗ Failed to upsert chunk {chunk_number} to {cfg['table']}")
+                            return {
+                                "success": False,
+                                "data_loaded": total_processed,
+                                "data_filtered": total_processed,
+                                "tables_processed": [],
+                                "message": f"Failed to upsert chunk {chunk_number} to {cfg['table']}"
+                            }
+                        else:
+                            print(f"  ✓ Successfully upserted chunk {chunk_number} ({chunk_count:,} records) to {cfg['table']}")
+
+                    total_processed += chunk_count
+                    print(f"📊 Progress: {total_processed:,} / {total_records:,} records processed ({total_processed/total_records*100:.1f}%)")
+                else:
+                    print(f"⚠ Chunk {chunk_number}: No records found")
+
+                # Clean up chunk DataFrame
+                chunk_df.unpersist(blocking=False)
+
+            except Exception as chunk_error:
+                print(f"✗ Error processing chunk {chunk_number}: {chunk_error}")
+                import traceback
+                traceback.print_exc()
+                return {
+                    "success": False,
+                    "data_loaded": total_processed,
+                    "data_filtered": total_processed,
+                    "tables_processed": [],
+                    "message": f"Failed to process chunk {chunk_number}: {str(chunk_error)}"
+                }
+
+            # Move to next chunk (ensure result is a date object)
+            next_date = chunk_end_date + timedelta(days=1)
+            current_date = next_date.date() if isinstance(next_date, datetime) else next_date
+            chunk_number += 1
+
+        # Return success with final counts
+        tables_processed = [{"table": cfg["table"], "records": total_processed} for cfg in TARGETS]
+
+        return {
+            "success": True,
+            "data_loaded": total_processed,
+            "data_filtered": total_processed,
+            "tables_processed": tables_processed,
+            "max_ppd_complete_time": max_complete_time_overall,
+            "message": f"Chunked data transformation completed successfully - processed {total_processed:,} records in {chunk_number-1} chunks"
+        }
+
+    except Exception as e:
+        print(f"✗ Error in chunked processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "data_loaded": 0,
+            "data_filtered": 0,
+            "tables_processed": [],
+            "message": f"Chunked processing failed: {str(e)}"
+        }
 
 
 def upsert_data_via_spark(

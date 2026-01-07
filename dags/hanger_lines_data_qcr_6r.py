@@ -223,7 +223,7 @@ def hanger_lines_data_qcr():
     for conn_id in SOURCE_HANGER_LANE:
         with TaskGroup(group_id=f"line_{conn_id}", tooltip=f"Pipeline for {conn_id}") as tg:
             src = check_source_connection.override(task_id=f"source_check_{conn_id}")(conn_id)
-            tgt = check_target_connection.override(task_id=f"target_check_{conn_id}")(conn_id)
+            tgt = check_target_connection.override(task_id=f"target_check_{"pg-ssg"}")("pg-ssg")
             dat = check_for_new_data.override(task_id=f"data_check_{conn_id}")(conn_id)
             ext = extract_from_source.override(task_id=f"extract_{conn_id}")(conn_id)
             # sav = save_data_to_postgres_task.override(task_id=f"save_{conn_id}")(conn_id)

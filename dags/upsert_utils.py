@@ -4,7 +4,7 @@ from typing import Dict, List, Any
 import pandas as pd
 
 def sanitize_records(data: List[Dict[str, Any]], key_columns: List[str]) -> List[Dict[str, Any]]:
-    """Ensure PK fields are non-null and fix date/time types."""
+    """Ensure PK fields are non-null and fix date/time types for all datetime columns."""
     clean_data = []
     for record in data:
         for key in key_columns:
@@ -15,13 +15,28 @@ def sanitize_records(data: List[Dict[str, Any]], key_columns: List[str]) -> List
                 else:
                     record[key] = "unknown"
 
-        # Type conversions
-        if "odp_date" in record and not pd.isna(record["odp_date"]):
-            record["odp_date"] = pd.to_datetime(record["odp_date"]).date()
-        if "hour_timestamp" in record and not pd.isna(record["hour_timestamp"]):
-            record["hour_timestamp"] = pd.to_datetime(record["hour_timestamp"]).to_pydatetime()
-        if "created_at" in record and not pd.isna(record["created_at"]):
-            record["created_at"] = pd.to_datetime(record["created_at"]).to_pydatetime()
+        # Type conversions for all datetime-like columns
+        for col_name, value in record.items():
+            # Check if column name suggests it's a date/time field
+            col_lower = col_name.lower()
+            if any(pattern in col_lower for pattern in ['date', 'time', 'timestamp', 'created', 'updated', 'modified']):
+                if pd.isna(value):
+                    # Convert NaT/NaN/None to None
+                    record[col_name] = None
+                else:
+                    try:
+                        # Convert to datetime first
+                        dt = pd.to_datetime(value)
+                        # If it's just a date (no time component), convert to date object
+                        if dt.time() == pd.Timestamp('1900-01-01').time():
+                            record[col_name] = dt.date()
+                        else:
+                            # Otherwise convert to full datetime
+                            record[col_name] = dt.to_pydatetime()
+                    except (ValueError, TypeError):
+                        # If conversion fails, leave as is
+                        pass
+
         clean_data.append(record)
     return clean_data
 

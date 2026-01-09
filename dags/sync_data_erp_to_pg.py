@@ -1,10 +1,10 @@
 """
-ETL DAG: MSSQL → PostgreSQL Table Sync (Lowercase + Upsert Mode)
+ETL DAG: MSSQL → PostgreSQL Table Sync (Lowercase + Replace Mode)
 ------------------------------------------------------------------
 ✅ MSSQL + PostgreSQL connection checks with retry
 ✅ Dynamically lists tables from MSSQL
 ✅ Converts table names & fields to lowercase
-✅ Upserts PostgreSQL tables each sync
+✅ Replaces PostgreSQL tables each sync
 ✅ Loads data in safe chunks with type inference
 ✅ Logs progress & pushes XCom for summary
 ✅ Runs every 30 min, Mon-Sat (8 AM-2 AM PKT)
@@ -49,23 +49,15 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'create_view_ssg.sql'), 'r') as f:
     create_view_ssg = f.read()
 
-from upsert_utils import upsert_data_via_postgres, create_connection_params_from_airflow
-from sqlalchemy import inspect
-
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["clientpurchaseorder","loadinginformation","operationinformation","hangerline_emp","transfertopacking"]
+INCLUDED_VIEWS = ["ClientPurchaseOrder","LoadingInformation","OperationInformation","hangerline_emp"]
 
-
-
-# -----------------source and target same list use for full table sync with pk ---------------- #
 TARGETS = [
-    {"table": "clientpurchaseorder", "pk": ["id"]},
-    {"table": "loadinginformation", "pk": ["id"]},
-    {"table": "operationinformation", "pk": ["id"]},
+    {"table": "ClientPurchaseOrder", "pk": ["id"]},
+    {"table": "LoadingInformation", "pk": ["id"]},
+    {"table": "OperationInformation", "pk": ["id"]},
     {"table": "hangerline_emp", "pk": ["id"]},
-    {"table": "transfertopacking", "pk": ["id"]},
-
 ]
 
 
@@ -158,7 +150,7 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 # DAG DEFINITION
 # ---------------------------------------------------------------- #
 @dag(
-    dag_id="data_sync_mssql_to_postgres",
+    dag_id="sync_data_erp_to_pg",
     default_args=default_args,
     schedule='0 2 * * *',  # Run daily at 2 AM
     tags=["ERP-To-HangerLines", "SilverStr", "ssg", "sync"],
@@ -242,15 +234,12 @@ def data_sync_mssql_to_postgres():
     @task
     @retry_on_exception(label="PostgreSQL Data Load")
     def load_table(table_name: str, ti=None):
-        """Load MSSQL → PostgreSQL with lowercase normalization & upsert mode."""
+        """Load MSSQL → PostgreSQL with lowercase normalization & replace mode."""
         conn = BaseHook.get_connection(MSSQL_CONN_ID)
         conn_str = build_mssql_conn_str(conn)
         engine = get_postgres_engine()
         total_rows = 0
         target_table = table_name.lower()  # ✅ lowercase table name
-
-        # Get primary key for this table
-        pk = next((t['pk'] for t in TARGETS if t['table'] == table_name.lower()), None)
 
         # Check if the table exists in the dbo schema before proceeding
         try:
@@ -279,98 +268,34 @@ def data_sync_mssql_to_postgres():
             ti.xcom_push(key=f"{target_table}_load", value=msg)
             return msg
 
-        logger.info(f"🚀 Starting upsert for table: {target_table}")
-
-        # Check if PG table exists
-        inspector = inspect(engine)
-        pg_table_exists = inspector.has_table(target_table)
-
-        conn_params = create_connection_params_from_airflow(POSTGRES_CONN_ID)
-
+        logger.info(f"🚀 Starting full replace for table: {target_table}")
         with pyodbc.connect(conn_str) as mssql_conn:
+            # Use qualified table name (dbo.table_name) to ensure correct schema
             qualified_table_name = f"dbo.{table_name}"
-            chunk_iter = pd.read_sql(f"SELECT * FROM {qualified_table_name}", mssql_conn, chunksize=CHUNK_SIZE)
-
-            first = True
-            for chunk in chunk_iter:
+            for chunk in pd.read_sql(f"SELECT * FROM {qualified_table_name}", mssql_conn, chunksize=CHUNK_SIZE):
                 # ✅ Convert all columns to lowercase
                 chunk.columns = [c.lower() for c in chunk.columns]
-
-                # ✅ Handle 'NaT' strings before type conversion (replace with None for NULL)
-                for col in chunk.columns:
-                    chunk[col] = chunk[col].replace('NaT', None)
 
                 # ✅ Infer data types
                 chunk = infer_column_types(chunk)
 
-                # ✅ Handle NaT values in datetime columns (replace with None for NULL)
-                for col in chunk.columns:
-                    if pd.api.types.is_datetime64_any_dtype(chunk[col]):
-                        # Replace NaT with None explicitly
-                        chunk[col] = chunk[col].apply(lambda x: None if pd.isna(x) else x)
-
-                # Convert to dict records, ensuring NaT values become None
-                records = []
-                for _, row in chunk.iterrows():
-                    record = {}
-                    for col in chunk.columns:
-                        value = row[col]
-                        if pd.isna(value):
-                            record[col] = None
-                        else:
-                            record[col] = value
-                    records.append(record)
-
-                if first and not pg_table_exists:
-                    # Create table with schema
-                    chunk.to_sql(
-                        name=target_table,
-                        con=engine,
-                        if_exists='replace',
-                        index=False,
-                    )
-
-                    # Add primary key constraint if specified
-                    if pk:
-                        pk_cols = ", ".join([f'"{col}"' for col in pk])
-                        constraint_name = f"pk_{target_table}_{'_'.join(pk)}"
-                        alter_sql = f'ALTER TABLE {target_table} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({pk_cols});'
-                        try:
-                            with engine.connect() as conn:
-                                conn.execute(text(alter_sql))
-                                conn.commit()
-                            logger.info(f"Added primary key constraint to {target_table}: {pk_cols}")
-                        except Exception as e:
-                            logger.warning(f"Could not add primary key constraint to {target_table}: {e}")
-
-                    logger.info(f"Created table {target_table}")
-                    pg_table_exists = True
-
-                # Upsert the chunk
-                if pk:
-                    success = upsert_data_via_postgres(records, target_table, pk, conn_params)
-                    if not success:
-                        msg = f"❌ {target_table}: upsert failed for chunk"
-                        ti.xcom_push(key=f"{target_table}_load", value=msg)
-                        return msg
-                else:
-                    # Fallback to append if no pk (though all should have)
-                    chunk.to_sql(
-                        name=target_table,
-                        con=engine,
-                        if_exists='append',
-                        index=False,
-                    )
-
+                # ✅ Replace first batch, append subsequent ones
+                mode = "replace" if total_rows == 0 else "append"
+                chunk.to_sql(
+                    name=target_table,
+                    con=engine,
+                    if_exists=mode,
+                    index=False,
+                    method="multi",
+                )
                 total_rows += len(chunk)
-                logger.info(f"📦 {target_table}: upserted {len(chunk)} rows (total {total_rows})")
-                first = False
+                logger.info(f"📦 {target_table}: Loaded {len(chunk)} rows (total {total_rows})")
 
-        msg = f"✅ {target_table}: upserted table with {total_rows} rows"
+        msg = f"✅ {target_table}: replaced table with {total_rows} rows"
         ti.xcom_push(key=f"{target_table}_load", value=msg)
         return msg
 
-    # ---------------- SUMMARY ---------------- #
+        # ---------------- SUMMARY ---------------- #
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def summarize_results(ti=None):
         """Aggregate and log ETL outcomes across all synced views.

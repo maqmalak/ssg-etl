@@ -251,7 +251,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             EM_Master_Rework.EM_LCD_Name AS qcr_repair_em_lcd_name,
 
             COALESCE( EM_Master_Defect.EM_Department,'ina-db-6r') AS source_line,   
-            QC_Rework_1.QCR_STPO_Key AS qcr_stpo_key
+            QC_Rework_1.QCR_STPO_Key AS qcr_stpo_key,
+            SPO.STPO_ST_Key AS stpo_st_key,
+            SPO.STPO_ID AS stpo_id,
+            SPO.STPO_CI_Name AS stpo_ci_name
 
         FROM
         IHS_SHARED.dbo.Style_Master AS Style_Master_1
@@ -278,6 +281,8 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             ON RIGHT(QC_Rework_1.QCR_Repair_EM_Key,6) = RIGHT(EM_Master_Rework.EM_Key,6)
         LEFT OUTER JOIN IHS_SHARED.dbo.Employee_Master AS EM_Master_QC 
             ON QC_Rework_1.QCR_Sent_To_Rework_By_EM_Key = EM_Master_QC.EM_Key
+        LEFT JOIN IHS_SHARED.dbo.Style_Planned_Orders AS SPO
+            ON QC_Rework_1.QCR_STPO_Key = SPO.STPO_Key
         WHERE QCR_Defect_DateTime > ?
         ORDER BY QCR_Defect_DateTime ASC;
         """

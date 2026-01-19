@@ -89,7 +89,7 @@ def build_mssql_conn_str(conn):
 @dag(
     dag_id="update_all_lines_employees",
     default_args=default_args,
-    schedule="*/60 8-23,0-1 * * 1-6",  # Every 60 mins during shift hours
+    schedule='0 * * * *',  # Run hourly at the top of each hour
     tags=["ssg", "hangerline", "employee", "master"],
     max_active_runs=1,
     catchup=False,

@@ -10,41 +10,41 @@ class QualityControlRepair(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     qcr_key = Column(String(36), nullable=False)                 # UUID
-    qcr_stpo_key = Column(Integer)
+    qcr_stpo_key = Column(Integer, nullable=True)                # Made nullable for data quality
     qcr_defect_datetime = Column(DateTime)
     qcr_date = Column(Date)                                       # Date part of defect datetime
     shift = Column(String(10))                                   # "Day"/"Night"
-    qcr_defect_em_key = Column(Integer)
+    qcr_defect_em_key = Column(Integer, nullable=True)           # Made nullable for invalid employee codes
     defect_em_firstname = Column(String(100))
     defect_em_lastname = Column(String(100))
     defect_em_rfid = Column(String(50))
-    qcr_defect_st_key = Column(Integer)
-    qcr_defect_oc_key = Column(Integer)
+    qcr_defect_st_key = Column(String(36))
+    qcr_defect_oc_key = Column(String(36))
     oc_description = Column(String(255))
-    qcr_sent_to_rework_by_em_key = Column(Integer)
-    qcr_defect_quantity = Column(Integer)
+    qcr_sent_to_rework_by_em_key = Column(Integer, nullable=True) # Made nullable for data quality
+    qcr_defect_quantity = Column(Integer, nullable=True)         # Made nullable for data quality
     qcr_from_qc_station = Column(String(50))
     qcr_hm_id = Column(String(50))
     qcr_qc_datetime = Column(DateTime)
-    qcr_repair_em_key = Column(Integer)
+    qcr_repair_em_key = Column(Integer, nullable=True)           # Made nullable for invalid employee codes
     em_repair_firstname = Column(String(100))
     em_repair_lastname = Column(String(100))
     em_repair_rfid = Column(String(50))
     qcr_repair_datetime = Column(DateTime)
-    qcr_repair_quantity = Column(Integer)
-    qcr_defect_cm_key = Column(Integer)
+    qcr_repair_quantity = Column(Integer, nullable=True)         # Made nullable for data quality
+    qcr_defect_cm_key = Column(String(36))
     cm_description = Column(String(100))
-    qcr_defect_sm_key = Column(Integer)
+    qcr_defect_sm_key = Column(String(36))
     sm_description = Column(String(100))
     qcr_qcsc_key = Column(String(36))                            # GUID
     qcr_hm_key = Column(Integer, nullable=True)
     qcsc_description = Column(String(100))
     em_repair_firstname = Column(String(100))
-    em_repair_key = Column(Integer)
+    em_repair_key = Column(Integer, nullable=True)               # Made nullable for invalid employee codes
     em_repair_rfid = Column(String(50))
     st_id = Column(String(50))
     st_description = Column(String(100))
-    stpo_st_key = Column(Integer)
+    stpo_st_key = Column(Integer, nullable=True)                 # Made nullable for data quality
     stpo_id = Column(String(50))
     stpo_ci_name = Column(String(100))
     created_at = Column(DateTime)

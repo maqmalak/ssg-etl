@@ -10,7 +10,7 @@ Handles extraction from PostgreSQL and upsert to PostgreSQL with:
 
 from __future__ import annotations
 import logging, time, uuid, sys, os, gc, psutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Generator
 
 import pendulum
@@ -93,9 +93,9 @@ def get_source_postgres_engine():
     """Create Source PostgreSQL engine with Airflow connection or fallback."""
     from urllib.parse import quote_plus
     try:
-        c = BaseHook.get_connection("INA-7A")
+        c = BaseHook.get_connection("ina-db-7a")
         uri = f"postgresql://{c.login}:{quote_plus(c.password or '')}@{c.host}:{c.port}/{c.schema}"
-        logger.info(f"[PG] Source Connected via Airflow: {c.host}/{c.schema}")
+        logger.info(f"[PG] Source Connected via Airflow (ina-db-7a): {c.host}/{c.schema}")
     except Exception as e:
         logger.warning(f"[PG] Source Airflow conn failed ({e}), using fallback")
         uri = f"postgresql://postgres:{quote_plus('P@kistan12')}@172.16.7.6:5432/ssg"
@@ -103,14 +103,46 @@ def get_source_postgres_engine():
     return create_engine(uri, pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=3600, echo=False)
 
 # ---------------- SANITIZERS ---------------- #
-def sanitize_numeric(value: Any) -> Optional[int]:
-    """Safe integer conversion."""
+def sanitize_numeric(value: Any, default_value: int = None, field_name: str = "unknown") -> Optional[int]:
+    """Safe integer conversion with default fallback for data quality issues."""
     try:
         if value is None or str(value).strip().upper() in ("", "NULL", "NONE", "N/A", "BASE"):
+            if default_value is not None:
+                logger.warning(f"[DATA QUALITY] {field_name}: NULL/empty value converted to default {default_value}")
+                return default_value
             return None
-        return int(float(value))
-    except Exception:
-        return None
+
+        # Try direct integer conversion first
+        if isinstance(value, int):
+            return value
+
+        # Try float conversion then int (handles "123.0" strings)
+        if isinstance(value, float):
+            return int(value)
+
+        # String processing
+        str_val = str(value).strip()
+        if str_val.isdigit():
+            return int(str_val)
+
+        # Handle decimal strings like "123.0"
+        try:
+            float_val = float(str_val)
+            if float_val == int(float_val):  # Check if it's a whole number
+                return int(float_val)
+            else:
+                logger.warning(f"[DATA QUALITY] {field_name}: Non-integer float '{str_val}' converted to {default_value}")
+                return default_value
+        except ValueError:
+            pass
+
+        # If we get here, the value is not numeric
+        logger.warning(f"[DATA QUALITY] {field_name}: Non-numeric value '{str_val}' converted to {default_value}")
+        return default_value
+
+    except Exception as e:
+        logger.warning(f"[DATA QUALITY] {field_name}: Conversion error for '{value}': {e}, using default {default_value}")
+        return default_value
 
 
 def sanitize_float(value: Any) -> Optional[float]:
@@ -188,13 +220,15 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
     check_memory(f"{connection_id} - initial check")
 
     # Get source postgres connection and last extract timestamp
-    conn_str = get_source_postgres_engine()
-    # conn_str = build_mssql_conn_str(connection)
+    engine = get_source_postgres_engine()
     last_extract_dt = get_last_extract_dt_from_log(connection_id)
 
-        # If no previous extract, get minimum CreationDate from source
+    # If no previous extract, use a default date (e.g., 30 days ago)
     if not last_extract_dt:
-        logger.info(f"[{connection_id}] Using min CreationDate from source: {last_extract_dt}")
+        last_extract_dt = datetime.now(PKT) - timedelta(days=30)
+        logger.info(f"[{connection_id}] No previous extract found, using default date: {last_extract_dt}")
+    else:
+        logger.info(f"[{connection_id}] Incremental processing from: {last_extract_dt}")
 
 
     # SQL Query (fully aligned)
@@ -207,19 +241,20 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                 ELSE (pqtm.pqtm_date_back - INTERVAL '1 day')::date
             END AS qcr_date, 
             CASE
-                WHEN pqtm.pqtm_date_back::time BETWEEN '07:00:00'::time AND '16:00:00'::time
+                WHEN EXTRACT(HOUR FROM pqtm.pqtm_date_back) BETWEEN 7 AND 16
                     THEN 'Day'
                 ELSE 'Night'
             END AS shift, 
-            pqtm_bsm_code_back AS qcr_station, 
+            pqtm_bsm_code_back AS qcr_from_qc_station, 
             
             CASE
                 WHEN LEFT(pqtm.pqtm_bsm_code_back, 2) = '10' THEN 'line-30'
                 WHEN LEFT(pqtm.pqtm_bsm_code_back, 2) = '11' THEN 'line-21'
                 WHEN LEFT(pqtm.pqtm_bsm_code_back, 2) = '12' THEN 'line-32'
                 ELSE pqtm.pqtm_bsm_code_back
-            END AS source_connection, 
+            END AS source_line, 
             pqtm.pqtm_date_back qcr_defect_datetime, 
+
             pqtm.pqtm_complete_time qcr_repair_datetime, 
             pqtr.pqtr_key, 
             pqtr.pqtr_hei_key_receive, 
@@ -228,12 +263,12 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             pqtr.pqtr_hei_key_repair, 
             pqtr.pqtr_hei_key_recheck, 
             pqtr.pqtr_bindquantity, 
-            pqta.pqta_bqci_name, 
+            pqta.pqta_bqci_name as qcsc_description, 
             pqta.pqta_quantity AS qcr_defect_quantity, 
-            pqta.pqta_decisionresult qcsc_description, 
-            pqta.pqta_bqci_code, 
+            pqta.pqta_decisionresult , 
+            pqta.pqta_bqci_code AS qcr_qcsc_key, 
             pwb.pwb_code AS item_id, 
-            pwb.pwb_mixcode AS st_po_number, 
+            pwb.pwb_mixcode AS stpo_id, 
             pwb.pwb_psi_key, 
             pwb.pwb_psi_code AS st_id, 
             pwb.pwb_psi_name AS st_description, 
@@ -270,54 +305,56 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                 ON 
                 pqtr.pqtr_hei_key_repair = hei_repair.hei_key
         WHERE
-            pqtm.pqtm_date_back::date >= ?
+            pqtm.pqtm_date_back >= :last_extract_dt
         ORDER BY
             pqtm.pqtm_date_back DESC;
         """
-#         conn = get_database_connection()
-#         cursor = conn.cursor()
-    with pyodbc.connect(conn_str, timeout=30) as c:
-        cur = c.cursor()
-        cur.execute(query, [last_extract_dt])
+
+
+    engine = get_source_postgres_engine()
+    with engine.connect() as conn:
+        # Use SQLAlchemy's text() and execute() methods
+        result = conn.execute(text(query), {"last_extract_dt": last_extract_dt})
         total, batch_no = 0, 0
 
         while True:
-            rows = cur.fetchmany(BATCH_SIZE)
+            # Fetch rows using SQLAlchemy
+            rows = result.fetchmany(BATCH_SIZE)
             if not rows:
                 break
 
-            cols = [d[0].lower() for d in cur.description]
+            cols = [col.lower() for col in result.keys()]
             batch = []
 
             for r in rows:
                 d = dict(zip(cols, r))
                 batch.append({
-                    "qcr_key": str(d.get("qcr_key")),
-                    "qcr_stpo_key": sanitize_numeric(d.get("qcr_stpo_key")),
+                    "qcr_key": str(d.get("qcr_key") or ""),
+                    "qcr_stpo_key": sanitize_numeric(d.get("qcr_stpo_key"), default_value=None, field_name="qcr_stpo_key"),
                     "qcr_defect_datetime": d.get("qcr_defect_datetime"),
                     "qcr_date": d.get("qcr_date"),
                     "shift": d.get("shift"),
-                    "qcr_defect_em_key": sanitize_numeric(d.get("qcr_defect_em_key")),
+                    "qcr_defect_em_key": sanitize_numeric(d.get("qcr_defect_em_key"), default_value=None, field_name="qcr_defect_em_key"),
                     "defect_em_firstname": d.get("defect_em_firstname"),
-                    "qcr_defect_st_key": sanitize_numeric(d.get("qcr_defect_st_key")),
-                    "qcr_defect_oc_key": sanitize_numeric(d.get("qcr_defect_oc_key")),
+                    "qcr_defect_st_key": d.get("qcr_defect_st_key"),  # String field, no sanitization needed
+                    "qcr_defect_oc_key": d.get("qcr_defect_oc_key"),  # String field, no sanitization needed
                     "oc_description": d.get("oc_description"),
-                    "qcr_defect_quantity": sanitize_numeric(d.get("qcr_defect_quantity")),
+                    "qcr_defect_quantity": sanitize_numeric(d.get("qcr_defect_quantity"), default_value=None, field_name="qcr_defect_quantity"),
                     "qcr_from_qc_station": d.get("qcr_from_qc_station"),
                     "qcr_qc_datetime": d.get("qcr_qc_datetime"),
-                    "qcr_repair_em_key": sanitize_numeric(d.get("qcr_repair_em_key")),
+                    "em_repair_key": sanitize_numeric(d.get("qcr_repair_em_key"), default_value=None, field_name="qcr_repair_em_key"),
                     "em_repair_firstname": d.get("em_repair_firstname"),
                     "qcr_repair_datetime": d.get("qcr_repair_datetime"),
-                    "qcr_repair_quantity": sanitize_numeric(d.get("qcr_repair_quantity")),
-                    "qcr_defect_cm_key": sanitize_numeric(d.get("qcr_defect_cm_key")),
+                    "qcr_repair_quantity": sanitize_numeric(d.get("qcr_repair_quantity"), default_value=None, field_name="qcr_repair_quantity"),
+                    "qcr_defect_cm_key": d.get("qcr_defect_cm_key"),  # String field, no sanitization needed
                     "cm_description": d.get("cm_description"),
-                    "qcr_defect_sm_key": sanitize_numeric(d.get("qcr_defect_sm_key")),
+                    "qcr_defect_sm_key": d.get("qcr_defect_sm_key"),  # String field, no sanitization needed
                     "sm_description": d.get("sm_description"),
-                    "qcr_qcsc_key": str(d.get("qcr_qcsc_key")),
+                    "qcr_qcsc_key": str(d.get("qcr_qcsc_key") or ""),
                     "qcsc_description": d.get("qcsc_description"),
                     "st_id": d.get("st_id"),
                     "st_description": d.get("st_description"),
-                    "stpo_st_key": sanitize_numeric(d.get("stpo_st_key")),
+                    "stpo_st_key": sanitize_numeric(d.get("stpo_st_key"), default_value=None, field_name="stpo_st_key"),
                     "stpo_id": d.get("stpo_id"),
                     "stpo_ci_name": d.get("stpo_ci_name"),
                     'created_at': datetime.now(PKT),

@@ -200,10 +200,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     THEN CONVERT(DATE, QC_Rework_1.QCR_Defect_DateTime)
                 ELSE DATEADD(DAY, -1, CONVERT(DATE, QC_Rework_1.QCR_Defect_DateTime))
             END AS qcr_date,
-            CASE 
-                WHEN CAST(QC_Rework_1.QCR_Defect_DateTime AS TIME) BETWEEN '07:00:00' AND '16:00:00' 
-                THEN 'Day' 
-                ELSE 'Night' 
+            CASE
+                WHEN DATEPART(HOUR, QC_Rework_1.QCR_Defect_DateTime) BETWEEN 8 AND 16
+                THEN 'Day'
+                ELSE 'Night'
             END as shift,
             QC_Rework_1.QCR_Key AS qcr_key,
             QC_Rework_1.QCR_Defect_EM_Key AS qcr_defect_em_key,
@@ -228,8 +228,11 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             QC_Sub_Codes_1.QCSC_Description AS qcsc_description,
             QC_Sub_Codes_1.QCSC_Is_Rework AS qcsc_is_rework,
 
-            QC_Rework_1.QCR_From_QC_Station AS qcr_station,
-            QC_Rework_1.QCR_QC_DateTime AS qcr_defect_datetime,
+            QC_Rework_1.QCR_From_QC_Station AS qcr_from_qc_station,
+            CASE WHEN ISNULL(QC_Rework_1.QCR_QC_DateTime, QC_Rework_1.QCR_Defect_DateTime) < QC_Rework_1.QCR_Defect_DateTime
+                    THEN QC_Rework_1.QCR_Defect_DateTime
+                    ELSE ISNULL(QC_Rework_1.QCR_QC_DateTime, QC_Rework_1.QCR_Defect_DateTime)
+            END AS qcr_defect_datetime,
             QC_Rework_1.QCR_Repair_EM_Key AS qcr_repair_em_key,
             EM_Master_Rework.EM_FirstName AS em_repair_firstname,
             EM_Master_Rework.EM_LastName AS em_repair_lastname,
@@ -250,7 +253,11 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             EM_Master_QC.EM_LCD_Name AS qcr_qc_em_lcd_name,
             EM_Master_Rework.EM_LCD_Name AS qcr_repair_em_lcd_name,
 
-            COALESCE( EM_Master_Defect.EM_Department,'ina-db-6r') AS source_line,   
+            CASE WHEN EM_Master_Defect.EM_Department='Other Lines' THEN 'line-22'
+                 WHEN EM_Master_Defect.EM_Department IS NULL THEN 'line-22'
+                 ELSE EM_Master_Defect.EM_Department
+            END AS source_line,
+ 
             QC_Rework_1.QCR_STPO_Key AS qcr_stpo_key,
             SPO.STPO_ST_Key AS stpo_st_key,
             SPO.STPO_ID AS stpo_id,
@@ -271,7 +278,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             ON QC_Rework_1.QCR_Defect_CM_Key = Colour_Master_1.CM_Key
         LEFT OUTER JOIN IHS_SHARED.dbo.Operation_Codes AS Operation_Codes_1 
             ON QC_Rework_1.QCR_Defect_OC_Key = Operation_Codes_1.OC_Key
-        LEFT OUTER JOIN .IHS_SHARED.dbo.Primary_Codes AS Primary_Codes_1 
+        LEFT OUTER JOIN IHS_SHARED.dbo.Primary_Codes AS Primary_Codes_1
             ON Primary_Codes_1.PC_Key = Operation_Codes_1.OC_PC_Key
         LEFT OUTER JOIN IHS_SHARED.dbo.QC_Sub_Codes AS QC_Sub_Codes_1 
             ON QC_Rework_1.QCR_QCSC_Key = QC_Sub_Codes_1.QCSC_Key
@@ -283,10 +290,11 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             ON QC_Rework_1.QCR_Sent_To_Rework_By_EM_Key = EM_Master_QC.EM_Key
         LEFT JOIN IHS_SHARED.dbo.Style_Planned_Orders AS SPO
             ON QC_Rework_1.QCR_STPO_Key = SPO.STPO_Key
-        WHERE QCR_Defect_DateTime > ?
-        ORDER BY QCR_Defect_DateTime ASC;
+        WHERE QC_Rework_1.QCR_Defect_DateTime > ?
+        ORDER BY QC_Rework_1.QCR_Defect_DateTime ASC;
         """
-
+        # WHERE QCR_Defect_DateTime > ? [last_extract_dt]
+    
     with pyodbc.connect(conn_str, timeout=30) as c:
         cur = c.cursor()
         cur.execute(query, [last_extract_dt])
@@ -312,23 +320,23 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "defect_em_firstname": d.get("defect_em_firstname"),
                     "defect_em_lastname": d.get("defect_em_lastname"),
                     "defect_em_rfid": d.get("defect_em_rfid"),
-                    "qcr_defect_st_key": sanitize_numeric(d.get("qcr_defect_st_key")),
-                    "qcr_defect_oc_key": sanitize_numeric(d.get("qcr_defect_oc_key")),
+                    "qcr_defect_st_key": str(d.get("qcr_defect_st_key")),
+                    "qcr_defect_oc_key": str(d.get("qcr_defect_oc_key")),
                     "oc_description": d.get("oc_description"),
                     "qcr_sent_to_rework_by_em_key": sanitize_numeric(d.get("qcr_sent_to_rework_by_em_key")),
                     "qcr_defect_quantity": sanitize_numeric(d.get("qcr_defect_quantity")),
                     "qcr_from_qc_station": d.get("qcr_from_qc_station"),
                     "qcr_hm_id": d.get("qcr_hm_id"),
                     "qcr_qc_datetime": d.get("qcr_qc_datetime"),
-                    "qcr_repair_em_key": sanitize_numeric(d.get("qcr_repair_em_key")),
+                    "em_repair_key": sanitize_numeric(d.get("qcr_repair_em_key")),
                     "em_repair_firstname": d.get("em_repair_firstname"),
                     "em_repair_lastname": d.get("em_repair_lastname"),
                     "em_repair_rfid": d.get("em_repair_rfid"),
                     "qcr_repair_datetime": d.get("qcr_repair_datetime"),
                     "qcr_repair_quantity": sanitize_numeric(d.get("qcr_repair_quantity")),
-                    "qcr_defect_cm_key": sanitize_numeric(d.get("qcr_defect_cm_key")),
+                    "qcr_defect_cm_key": str(d.get("qcr_defect_cm_key")),
                     "cm_description": d.get("cm_description"),
-                    "qcr_defect_sm_key": sanitize_numeric(d.get("qcr_defect_sm_key")),
+                    "qcr_defect_sm_key": str(d.get("qcr_defect_sm_key")),
                     "sm_description": d.get("sm_description"),
                     "qcr_qcsc_key": str(d.get("qcr_qcsc_key")),
                     "qcsc_description": d.get("qcsc_description"),

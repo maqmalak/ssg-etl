@@ -66,3 +66,48 @@ class TargetGeneralLedger(BaseModel):
     Main_Title = Column(String(255))
     source_connection = Column(String(255))
 
+
+class ApparalOperatorPerformance(BaseModel):
+    __tablename__ = 'ApparalOperatorsPerformance'
+
+    Dated = Column(Date)
+    Vtp = Column(String(20))
+    Mnth = Column(String(8))
+    vYear = Column(String(8))
+    Location = Column(String(100))
+    ForLocation = Column(String(100))
+    vno = Column(Numeric)
+    ScrVoucher_No = Column(String(100))
+    Voucher_No = Column(String(100))
+    MainDeptt_ID = Column(String(50))
+    EmpDeptt_ID = Column(String(50))
+    Narration = Column(Text)
+    EntryNo = Column(Numeric)
+    CreationDate = Column(DateTime)
+    prp_id = Column(String(50))
+    ComputerName = Column(String(100))
+
+
+class ApparalOperatorPerformanceDet(BaseModel):
+    __tablename__ = 'ApparalOperatorsPerformance_Det'
+
+    Dated = Column(Date)
+    Vtp = Column(String(10))
+    Mnth = Column(String(8))
+    vYear = Column(String(8))
+    Location = Column(String(100))
+    vno = Column(Numeric)
+    srno = Column(Numeric)
+    Voucher_No = Column(String(100))
+    DVoucher_No = Column(String(100))
+    ProductionDate = Column(Date)
+    Emp_ID = Column(String(50))
+    Location_ID = Column(String(50))
+    Line_ID = Column(String(50))
+    Article_ID = Column(String(50))
+    SubOperation_ID = Column(String(50))
+    Qty = Column(Numeric)
+    EntryNo = Column(Numeric)
+    PONo = Column(String(50))
+    SMV = Column(Float)
+    Conversion = Column(Float)

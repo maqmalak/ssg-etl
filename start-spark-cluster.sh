@@ -53,7 +53,7 @@ fi
 print_info "docker-compose.yaml found ✓"
 
 # Check if Spark custom image exists
-if ! docker images | grep -q "spark-custom.*3.5.0"; then
+if ! docker images | grep -q "apache/spark:3.5.0"; then
     print_warn "Spark custom image not found. Building it now..."
     docker compose build spark-master
     print_info "Spark custom image built ✓"

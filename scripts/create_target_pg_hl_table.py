@@ -60,9 +60,9 @@ class HangerLaneData(Base):
     odpd_stpo_key = Column(String(50))
     created_at = Column(DateTime)
     source_connection = Column(String(50))
-    # fg_item_key = Column(String(50))
-    # odp_efficency = Column(Float)
-    # ppd_tvwh = Column(Float)
+    fg_item_key = Column(String(50))
+    odp_efficency = Column(Float)
+    ppd_tvwh = Column(Float)
 
     __table_args__ = (
         Index('idx_odp_date', 'odp_date'),

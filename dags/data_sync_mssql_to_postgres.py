@@ -34,8 +34,7 @@ logger.setLevel(logging.INFO)
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    # "start_date": datetime(2026, 1, 1, 17, 0, tzinfo=PKT),
-    "start_date":datetime.now(PKT) - timedelta(minutes=30),
+    "start_date": datetime.now(PKT) - timedelta(minutes=30),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
     "execution_timeout": timedelta(hours=1),
@@ -158,9 +157,9 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 # DAG DEFINITION
 # ---------------------------------------------------------------- #
 @dag(
-    dag_id="data_sync_mssql_to_postgres",
+    dag_id="data_sync_legacy_erp_to_postgres",
     default_args=default_args,
-    schedule='0 8-23,0-1 * * 1-6',  # Run hourly at the top of each hour
+    schedule='1 8-23,0-1 * * 1-6',  # Run every hour
     tags=["ERP-To-HangerLines", "SilverStr", "ssg", "sync"],
     max_active_runs=1,
 )

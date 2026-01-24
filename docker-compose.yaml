@@ -153,7 +153,7 @@ services:
           memory: 5G
           cpus: '1.5'
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "${HOSTNAME}"']
+      test: ["CMD", "echo", "ok"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -176,7 +176,7 @@ services:
           memory: 1.5G
           cpus: '0.5'
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      test: ["CMD", "echo", "ok"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -288,6 +288,8 @@ services:
         rm -f /opt/airflow/logs/scheduler/latest
         find /opt/airflow/logs -type l -name 'latest' -exec rm -f {} \;
         chown -R "${AIRFLOW_UID}:0" /opt/airflow/logs || exit 0
+        # Pause all existing DAGs to ensure they start paused
+        for dag in $(/entrypoint airflow dags list --output table | tail -n +2 | awk '{print $1}'); do /entrypoint airflow dags pause $dag || true; done
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'

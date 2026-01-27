@@ -280,7 +280,8 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             IHS.dbo.ODP_Detail.ODPD_Normal_Pay_Factor AS odpd_normal_pay_factor,
             IHS.dbo.ODP_Detail.ODPD_Overtime_Factor AS odpd_overtime_factor,
             li.Line_Number AS odpd_line_number,
-            IHS.dbo.ODP_Master.[modified_at] AS created_at
+            IHS.dbo.ODP_Master.[modified_at] AS created_at,
+
         FROM
             lnk_svr.IHS_SHARED.dbo.Style_Operations_Master AS Style_Operations_Master_1
             INNER JOIN lnk_svr.IHS_SHARED.dbo.Style_Operations AS Style_Operations_1 ON Style_Operations_Master_1.STOPM_Key = Style_Operations_1.STOP_STOPM_Key
@@ -369,6 +370,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "odpd_stpo_key": sanitize_numeric(d.get("odpd_stpo_key")),
                     "created_at": d.get("created_at"),
                     "source_connection": connection_id
+                    "fg_item_key": str(d.get("fg_item_key")) if d.get("fg_item_key") else None,
+                    "odp_efficency": sanitize_float(d.get("odp_efficency")),
+                    "ppd_tvwh": sanitize_float(d.get("ppd_tvwh"))
+
                 })
 
             yield batch

@@ -282,7 +282,8 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             li.Line_Number AS odpd_line_number,
             IHS.dbo.ODP_Master.[modified_at] AS created_at,
             null as fg_item_key ,
-            0 as odp_efficency,
+            /*--- New Fields ---*/
+            0 as efficiency,
             0 as ppd_tvwh
 
 
@@ -375,7 +376,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "created_at": d.get("created_at"),
                     "source_connection": connection_id,
                     "fg_item_key": str(d.get("fg_item_key")) if d.get("fg_item_key") else None,
-                    "odp_efficency": sanitize_float(d.get("odp_efficency")),
+                    "efficiency": sanitize_float(d.get("efficiency")),
                     "ppd_tvwh": sanitize_float(d.get("ppd_tvwh"))
 
                 })

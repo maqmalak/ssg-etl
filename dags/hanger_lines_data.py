@@ -373,7 +373,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "odpd_actual_time_from_reader": sanitize_float(d.get("odpd_actual_time_from_reader")),
                     "odpd_stpo_key": sanitize_numeric(d.get("odpd_stpo_key")),
                     "created_at": d.get("created_at"),
-                    "source_connection": connection_id
+                    "source_connection": connection_id,
                     "fg_item_key": str(d.get("fg_item_key")) if d.get("fg_item_key") else None,
                     "odp_efficency": sanitize_float(d.get("odp_efficency")),
                     "ppd_tvwh": sanitize_float(d.get("ppd_tvwh"))

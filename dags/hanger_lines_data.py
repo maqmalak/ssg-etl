@@ -281,6 +281,10 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             IHS.dbo.ODP_Detail.ODPD_Overtime_Factor AS odpd_overtime_factor,
             li.Line_Number AS odpd_line_number,
             IHS.dbo.ODP_Master.[modified_at] AS created_at,
+            null as fg_item_key ,
+            0 as odp_efficency,
+            0 as ppd_tvwh
+
 
         FROM
             lnk_svr.IHS_SHARED.dbo.Style_Operations_Master AS Style_Operations_Master_1

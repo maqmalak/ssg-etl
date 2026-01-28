@@ -159,7 +159,7 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 @dag(
     dag_id="data_sync_legacy_erp_to_postgres",
     default_args=default_args,
-    schedule='1 8-23,0-1 * * 1-6',  # Run every hour
+    schedule='0,30 8-23 * * 1-6',  # Run every hour
     tags=["ERP-To-HangerLines", "SilverStr", "ssg", "sync"],
     max_active_runs=1,
 )

@@ -1,0 +1,175 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - '2181:2181'
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo srvr | nc zookeeper 2181 || exit 1
+      start_period: 10s
+      retries: 20
+      interval: 10s
+    restart: unless-stopped
+    networks:
+      airflow_network:
+
+  broker:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: broker
+    container_name: broker
+    ports:
+      - '29092:29092'
+      - '9092:9092'
+      - '9101:9101'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+    healthcheck:
+      test: nc -z localhost 9092 || exit -1
+      start_period: 15s
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      airflow_network:
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.4.0
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      broker:
+        condition: service_healthy
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      CONFLIENT_METRICS_ENABLE: 'false'
+      PORT: 9021
+    networks:
+      airflow_network:
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9021/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  
+  connect:
+    image: quay.io/debezium/connect:2.6
+    container_name: tutorial-connect-1
+    ports:
+      - "8083:8083"
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: broker:29092
+      GROUP_ID: connect-cluster
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "true"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "true"
+      REST_ADVERTISED_HOST_NAME: "connect"
+    networks:
+      airflow_network:
+
+    # Debezium Connect image sudah include semua plugins, tidak perlu volume plugins
+    # volumes:
+    #   - ./plugins:/etc/kafka-connect/plugins
+
+  # Optional: CLI container for debugging Kafka
+  kafka-tools:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-tools
+    depends_on:
+      - broker
+    entrypoint: tail -f /dev/null
+
+  # Optional: Web UI for Kafka topic monitoring
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    container_name: tutorial-kafdrop-1
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: broker:29092
+    depends_on:
+      - broker
+    networks:
+      airflow_network:
+
+  # Debezium UI for GUI Management (Source Connectors)
+  debezium-ui:
+    image: debezium/debezium-ui:2.4
+    container_name: debezium-ui
+    hostname: debezium-ui
+    depends_on:
+      - connect
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CONNECT_URIS: http://connect:8083
+    networks:
+      airflow_network:
+    restart: unless-stopped
+
+  # Kafka Connect UI for All Connectors (Source + Sink)
+  kafka-connect-ui:
+    image: landoop/kafka-connect-ui:0.9.7
+    container_name: kafka-connect-ui
+    hostname: kafka-connect-ui
+    depends_on:
+      - connect
+    ports:
+      - "8084:8000"
+    environment:
+      CONNECT_URL: http://connect:8083
+      PROXY: "true"
+    networks:
+      airflow_network:
+    restart: unless-stopped
+
+  cassandra_db:
+    image: cassandra:4.1
+    container_name: cassandra
+    hostname: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=100M
+      - CASSANDRA_USERNAME=cassandra
+      - CASSANDRA_PASSWORD=cassandra
+    networks:
+      airflow_network:
+
+networks:
+  airflow_network:
+    name: airflow_network
+    external: true

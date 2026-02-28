@@ -51,13 +51,14 @@ with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'creat
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["ClientPurchaseOrder","LoadingInformation","OperationInformation","hangerline_emp"]
+INCLUDED_VIEWS = ["ClientPurchaseOrder","LoadingInformation","OperationInformation","hangerline_emp","v_attenandance"]  # ✅ specify views to sync (case-sensitive)
 
 TARGETS = [
     {"table": "ClientPurchaseOrder", "pk": ["id"]},
     {"table": "LoadingInformation", "pk": ["id"]},
     {"table": "OperationInformation", "pk": ["id"]},
     {"table": "hangerline_emp", "pk": ["id"]},
+    {"table": "v_attenandance", "pk": ["id"]},
 ]
 
 

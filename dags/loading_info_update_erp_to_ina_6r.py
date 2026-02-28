@@ -1,10 +1,10 @@
 """
-ETL DAG: MSSQL → PostgreSQL Table Sync (Lowercase + Upsert Mode)
+ETL DAG: MSSQL → MSSQL Table Sync (Lowercase + Upsert Mode)
 ------------------------------------------------------------------
-✅ MSSQL + PostgreSQL connection checks with retry
+✅ MSSQL + MSSQL connection checks with retry
 ✅ Dynamically lists tables from MSSQL
 ✅ Converts table names & fields to lowercase
-✅ Upserts PostgreSQL tables each sync
+✅ Upserts MSSQL tables each sync
 ✅ Loads data in safe chunks with type inference
 ✅ Logs progress & pushes XCom for summary
 ✅ Runs every 30 min, Mon-Sat (8 AM-2 AM PKT)
@@ -48,32 +48,30 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 with open(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'SQL', 'create_view_ssg.sql'), 'r') as f:
     create_view_ssg = f.read()
 
-from upsert_utils import upsert_data_via_postgres, create_connection_params_from_airflow
 from sqlalchemy import inspect
 
-MSSQL_CONN_ID = "SilverStr"
-POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["clientpurchaseorder","loadinginformation","operationinformation","hangerline_emp","transfertopacking","v_attendance"]  # ✅ specify views to sync (case-sensitive)
+MSSQL_SOURCE_CONN_ID = "db-erp"
+MSSQL_TARGET_CONN_ID = "SSG_INA"
+INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee"]  # ✅ specify views to sync (case-sensitive)
 
 
 
 # -----------------source and target same list use for full table sync with pk ---------------- #
 TARGETS = [
-    {"table": "clientpurchaseorder", "pk": ["id"]},
-    {"table": "loadinginformation", "pk": ["id"]},
-    {"table": "operationinformation", "pk": ["id"]},
-    {"table": "hangerline_emp", "pk": ["id"]},
-    {"table": "transfertopacking", "pk": ["id"]},
-    {"table": "v_attendance", "pk": ["id"]},
+    {"table": "ina_planinfo", "pk": ["id"]},
+    {"table": "ina_operationinfo", "pk": ["id"]},
+    {"table": "ina_operationinfo", "pk": ["employeecode"]},
+
+
 ]
 
 
 # INCLUDED_TABLES = ["Coa31", "Employees", "DefDepartments", "OperationBreakDown", "OperationBreakDown_Det"]
-CHUNK_SIZE = 10000  # ✅ batch size for memory-safe processing
+CHUNK_SIZE = 50  # ✅ batch size for memory-safe processing and SQL Server parameter limit
 
 
 # ---------------------------------------------------------------- #
-# RETRY DECORATOR (for MSSQL & PostgreSQL checks)
+# RETRY DECORATOR (for MSSQL checks)
 # ---------------------------------------------------------------- #
 def retry_on_exception(max_retries=2, delay=3, backoff=1.5, label=None):
     """Retry function with exponential backoff and jitter"""
@@ -108,22 +106,10 @@ def build_mssql_conn_str(conn):
         "TDS_Version=7.0;Connect Timeout=60;Login Timeout=60;"
     )
 
-def get_postgres_engine():
-    """Return SQLAlchemy engine for PostgreSQL"""
-    from urllib.parse import quote_plus
-    try:
-        c = BaseHook.get_connection(POSTGRES_CONN_ID)
-        uri = f"postgresql://{c.login}:{quote_plus(c.password or '')}@{c.host}:{c.port}/{c.schema}"
-        logger.info(f"[PG] Connected via Airflow: {c.host}/{c.schema}")
-    except Exception as e:
-        logger.warning(f"[PG] Airflow conn failed ({e}), using fallback")
-        uri = f"postgresql://postgres:{quote_plus('P@kistan12')}@172.16.7.6:5432/ssg"
-
-    return create_engine(uri, pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=3600, echo=False)
 
 
 def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
-    """Auto-cast numeric and datetime columns for cleaner Postgres schema."""
+    """Auto-cast numeric and datetime columns for cleaner MSSQL schema."""
     for col in df.columns:
         series = df[col]
         # Convert numeric-looking strings to numbers
@@ -157,13 +143,13 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 # DAG DEFINITION
 # ---------------------------------------------------------------- #
 @dag(
-    dag_id="data_sync_legacy_erp_to_postgres",
+    dag_id="loading_info_update_erp_to_ina_6r",
     default_args=default_args,
     schedule='0,30 8-23 * * 1-6',  # Run every hour
-    tags=["ERP-To-HangerLines", "SilverStr", "ssg", "sync"],
+    tags=["Loading", "erptoina", "ssg", "sync"],
     max_active_runs=1,
 )
-def data_sync_mssql_to_postgres():
+def data_sync_mssql_to_mssql():
     start = EmptyOperator(task_id="start")
     end = EmptyOperator(task_id="end")
 
@@ -171,7 +157,7 @@ def data_sync_mssql_to_postgres():
     @task
     @retry_on_exception(label="MSSQL Source Check")
     def source_check(ti=None):
-        conn = BaseHook.get_connection(MSSQL_CONN_ID)
+        conn = BaseHook.get_connection(MSSQL_SOURCE_CONN_ID)
         conn_str = build_mssql_conn_str(conn)
         with pyodbc.connect(conn_str, timeout=30) as c:
             c.cursor().execute("SELECT 1")
@@ -182,12 +168,13 @@ def data_sync_mssql_to_postgres():
 
     # ---------------- TARGET CHECK ---------------- #
     @task
-    @retry_on_exception(label="PostgreSQL Target Check")
+    @retry_on_exception(label="MSSQL Target Check")
     def target_check(ti=None):
-        engine = get_postgres_engine()
-        with engine.connect().execution_options(timeout=30) as conn:
-            conn.execute(text("SELECT 1"))
-        msg = "✅ PostgreSQL Target reachable"
+        conn = BaseHook.get_connection(MSSQL_TARGET_CONN_ID)
+        conn_str = build_mssql_conn_str(conn)
+        with pyodbc.connect(conn_str, timeout=30) as c:
+            c.cursor().execute("SELECT 1")
+        msg = "✅ MSSQL Target reachable"
         logger.info(msg)
         ti.xcom_push(key="target_check", value=msg)
         return msg
@@ -197,7 +184,7 @@ def data_sync_mssql_to_postgres():
     # ---------------- LIST MSSQL TABLES ---------------- #
     @task
     def create_views() -> list:
-        conn = BaseHook.get_connection(MSSQL_CONN_ID)
+        conn = BaseHook.get_connection(MSSQL_SOURCE_CONN_ID)
         logger.info(f"MSSQL Connection - Host: {conn.host}, Schema(Database): {conn.schema}, Login: {conn.login}")
         conn_str = build_mssql_conn_str(conn)
         logger.info(f"Full connection string (without password): DRIVER={{FreeTDS}};SERVER={conn.host};PORT=1433;DATABASE={conn.schema};UID={conn.login};...")
@@ -218,7 +205,7 @@ def data_sync_mssql_to_postgres():
     # ---------------- LIST MSSQL TABLES ---------------- #
     @task
     def list_tables() -> list:
-        conn = BaseHook.get_connection(MSSQL_CONN_ID)
+        conn = BaseHook.get_connection(MSSQL_SOURCE_CONN_ID)
         logger.info(f"MSSQL Connection - Host: {conn.host}, Schema(Database): {conn.schema}, Login: {conn.login}")
         conn_str = build_mssql_conn_str(conn)
         logger.info(f"Full connection string (without password): DRIVER={{FreeTDS}};SERVER={conn.host};PORT=1433;DATABASE={conn.schema};UID={conn.login};...")
@@ -227,9 +214,9 @@ def data_sync_mssql_to_postgres():
           
             cur = c.cursor()
             query = f"""
-                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS 
-                WHERE TABLE_NAME IN ({','.join([f"'{t}'" for t in INCLUDED_VIEWS])}) 
-                AND TABLE_SCHEMA = 'dbo';
+                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS
+                WHERE TABLE_NAME IN ({','.join([f"'{t}'" for t in INCLUDED_VIEWS])})
+                AND TABLE_SCHEMA IN ('dbo') ;
             """
             logger.info(f"query: {query}")
             cur.execute(query)
@@ -239,58 +226,162 @@ def data_sync_mssql_to_postgres():
 
     # ---------------- TABLE DATA LOAD ---------------- #
     @task
-    @retry_on_exception(label="PostgreSQL Data Load")
+    @retry_on_exception(label="MSSQL Data Load")
     def load_table(table_name: str, ti=None):
-        """Load MSSQL → PostgreSQL with lowercase normalization & upsert mode."""
-        conn = BaseHook.get_connection(MSSQL_CONN_ID)
-        conn_str = build_mssql_conn_str(conn)
-        engine = get_postgres_engine()
+        """Load MSSQL → MSSQL with lowercase normalization & upsert mode."""
+        source_conn = BaseHook.get_connection(MSSQL_SOURCE_CONN_ID)
+        source_conn_str = build_mssql_conn_str(source_conn)
+        target_conn = BaseHook.get_connection(MSSQL_TARGET_CONN_ID)
+        target_conn_str = build_mssql_conn_str(target_conn)
         total_rows = 0
         target_table = table_name.lower()  # ✅ lowercase table name
 
         # Get primary key for this table
         pk = next((t['pk'] for t in TARGETS if t['table'] == table_name.lower()), None)
+        if pk:
+            pk = [k.lower() for k in pk]
 
-        # Check if the table exists in the dbo schema before proceeding
+        # Check if the source table exists and has data
         try:
-            with pyodbc.connect(conn_str, timeout=30) as c:
+            with pyodbc.connect(source_conn_str, timeout=30) as c:
                 cur = c.cursor()
                 check_query = f"""
                     SELECT COUNT(*)
                     FROM dbo.{table_name} ;
                  """
-                logger.info(f"Checking existence: {check_query} ")
+                logger.info(f"Checking source existence: {check_query} ")
                 cur.execute(check_query)
-                table_exists = cur.fetchone()[0] > 0
+                source_has_data = cur.fetchone()[0] > 0
 
-                if not table_exists:
-                    logger.info(f"⚠️ Table/view {table_name} has no data in dbo schema, skipping")
-                    msg = f"⚠️ {table_name}: skipped (no data in dbo schema)"
+                if not source_has_data:
+                    logger.info(f"⚠️ Table/view {table_name} has no data in source schema, skipping")
+                    msg = f"⚠️ {table_name}: skipped (no data in source)"
                     ti.xcom_push(key=f"{target_table}_load", value=msg)
                     return msg
         except pyodbc.ProgrammingError as e:
             if 'Invalid object name' in str(e):
-                logger.info(f"⚠️ Table/view {table_name} does not exist in dbo schema, skipping")
-                msg = f"⚠️ {table_name}: skipped (not found in dbo schema)"
+                logger.info(f"⚠️ Table/view {table_name} does not exist in source schema, skipping")
+                msg = f"⚠️ {table_name}: skipped (not found in source)"
             else:
                 logger.error(f"❌ Database error checking {table_name}: {e}")
                 msg = f"❌ {table_name}: failed (database error)"
             ti.xcom_push(key=f"{target_table}_load", value=msg)
             return msg
 
+        # Check if target table exists
+        with pyodbc.connect(target_conn_str) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM sys.tables WHERE name = ? AND schema_id = SCHEMA_ID('dbo')", (target_table,))
+            target_table_exists = cur.fetchone() is not None
+
         logger.info(f"🚀 Starting upsert for table: {target_table}")
 
-        # Check if PG table exists
-        inspector = inspect(engine)
-        pg_table_exists = inspector.has_table(target_table)
-
-        conn_params = create_connection_params_from_airflow(POSTGRES_CONN_ID)
-
-        with pyodbc.connect(conn_str) as mssql_conn:
+        with pyodbc.connect(source_conn_str) as mssql_conn:
             qualified_table_name = f"dbo.{table_name}"
             chunk_iter = pd.read_sql(f"SELECT * FROM {qualified_table_name}", mssql_conn, chunksize=CHUNK_SIZE)
 
-            first = True
+            # Get first chunk to determine dtypes
+            try:
+                first_chunk = next(chunk_iter)
+            except StopIteration:
+                logger.info(f"No data for {table_name}, skipping")
+                msg = f"⚠️ {table_name}: no data"
+                ti.xcom_push(key=f"{target_table}_load", value=msg)
+                return msg
+
+            # Convert columns to lowercase
+            first_chunk.columns = [c.lower() for c in first_chunk.columns]
+
+            # Infer types
+            first_chunk = infer_column_types(first_chunk)
+
+            # Store dtypes for consistent type conversion
+            dtypes = first_chunk.dtypes.copy()
+
+            if not target_table_exists:
+                # Create table SQL
+                create_sql = f"CREATE TABLE dbo.{target_table} ("
+                for col in first_chunk.columns:
+                    dtype = first_chunk[col].dtype
+                    if col.lower() == 'id':
+                        sql_type = 'NVARCHAR(255) PRIMARY KEY'
+                    elif dtype == 'int64':
+                        sql_type = 'BIGINT'
+                    elif dtype == 'float64':
+                        sql_type = 'FLOAT'
+                    elif dtype == 'object':
+                        sql_type = 'NVARCHAR(255)'
+                    elif pd.api.types.is_datetime64_any_dtype(first_chunk[col]):
+                        sql_type = 'DATETIME'
+                    else:
+                        sql_type = 'NVARCHAR(255)'
+                    create_sql += f"[{col}] {sql_type}, "
+                create_sql = create_sql.rstrip(', ') + ")"
+
+                with pyodbc.connect(target_conn_str) as conn:
+                    cur = conn.cursor()
+                    cur.execute(create_sql)
+                    conn.commit()
+
+                logger.info(f"Created table dbo.{target_table}")
+
+            # Process the first chunk
+            # Convert to records
+            records = []
+            for _, row in first_chunk.iterrows():
+                record = {}
+                for col in first_chunk.columns:
+                    value = row[col]
+                    if pd.isna(value):
+                        record[col] = None
+                    else:
+                        record[col] = value
+                # Skip if primary key is NULL
+                if pk and any(record.get(k) is None for k in pk):
+                    continue
+                records.append(record)
+
+            # Upsert the records
+            if pk:
+                columns = list(records[0].keys())
+                quoted_cols = ", ".join([f"[{c}]" for c in columns])
+                pk_cols = ", ".join([f"T.[{k}]" for k in pk])
+                on_clause = " AND ".join([f"T.[{k}] = S.[{k}]" for k in pk])
+                update_set = ", ".join([f"T.[{c}] = S.[{c}]" for c in columns if c not in pk])
+                insert_cols = ", ".join([f"[{c}]" for c in columns])
+                insert_values = ", ".join([f"S.[{c}]" for c in columns])
+
+                merge_sql = f"""
+                    MERGE dbo.{target_table} AS T
+                    USING (VALUES {', '.join(['(' + ', '.join(['?'] * len(columns)) + ')'] * len(records))})
+                        AS S ({quoted_cols})
+                    ON {on_clause}
+                    WHEN MATCHED THEN
+                        UPDATE SET {update_set}
+                    WHEN NOT MATCHED THEN
+                        INSERT ({insert_cols})
+                        VALUES ({insert_values});
+                """
+
+                # Flatten params
+                params = []
+                for rec in records:
+                    params.extend([rec[c] for c in columns])
+
+                with pyodbc.connect(target_conn_str, autocommit=False) as target_conn:
+                    cur = target_conn.cursor()
+                    try:
+                        cur.execute(merge_sql, params)
+                        target_conn.commit()
+                    except Exception as e:
+                        target_conn.rollback()
+                        logger.error(f"❌ Merge failed for {target_table}: {e}")
+                        msg = f"❌ {target_table}: upsert failed for first chunk"
+                        ti.xcom_push(key=f"{target_table}_load", value=msg)
+                        return msg
+
+            total_rows += len(first_chunk)
+
             for chunk in chunk_iter:
                 # ✅ Convert all columns to lowercase
                 chunk.columns = [c.lower() for c in chunk.columns]
@@ -301,6 +392,16 @@ def data_sync_mssql_to_postgres():
 
                 # ✅ Infer data types
                 chunk = infer_column_types(chunk)
+
+                # ✅ Apply consistent types based on first chunk
+                for col in chunk.columns:
+                    if col in dtypes:
+                        if dtypes[col] == 'int64' or str(dtypes[col]) == 'Int64':
+                            chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('Int64')
+                        elif dtypes[col] == 'float64':
+                            chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('float64')
+                        elif pd.api.types.is_datetime64_any_dtype(dtypes[col]):
+                            chunk[col] = pd.to_datetime(chunk[col], errors='coerce')
 
                 # ✅ Handle NaT values in datetime columns (replace with None for NULL)
                 for col in chunk.columns:
@@ -318,52 +419,52 @@ def data_sync_mssql_to_postgres():
                             record[col] = None
                         else:
                             record[col] = value
+                    # Skip if primary key is NULL
+                    if pk and any(record.get(k) is None for k in pk):
+                        continue
                     records.append(record)
 
-                if first and not pg_table_exists:
-                    # Create table with schema
-                    chunk.to_sql(
-                        name=target_table,
-                        con=engine,
-                        if_exists='replace',
-                        index=False,
-                    )
-
-                    # Add primary key constraint if specified
-                    if pk:
-                        pk_cols = ", ".join([f'"{col}"' for col in pk])
-                        constraint_name = f"pk_{target_table}_{'_'.join(pk)}"
-                        alter_sql = f'ALTER TABLE {target_table} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({pk_cols});'
-                        try:
-                            with engine.connect() as conn:
-                                conn.execute(text(alter_sql))
-                                conn.commit()
-                            logger.info(f"Added primary key constraint to {target_table}: {pk_cols}")
-                        except Exception as e:
-                            logger.warning(f"Could not add primary key constraint to {target_table}: {e}")
-
-                    logger.info(f"Created table {target_table}")
-                    pg_table_exists = True
-
-                # Upsert the chunk
+                # Upsert the chunk using MSSQL MERGE
                 if pk:
-                    success = upsert_data_via_postgres(records, target_table, pk, conn_params)
-                    if not success:
-                        msg = f"❌ {target_table}: upsert failed for chunk"
-                        ti.xcom_push(key=f"{target_table}_load", value=msg)
-                        return msg
-                else:
-                    # Fallback to append if no pk (though all should have)
-                    chunk.to_sql(
-                        name=target_table,
-                        con=engine,
-                        if_exists='append',
-                        index=False,
-                    )
+                    columns = list(records[0].keys())
+                    quoted_cols = ", ".join([f"[{c}]" for c in columns])
+                    pk_cols = ", ".join([f"T.[{k}]" for k in pk])
+                    on_clause = " AND ".join([f"T.[{k}] = S.[{k}]" for k in pk])
+                    update_set = ", ".join([f"T.[{c}] = S.[{c}]" for c in columns if c not in pk])
+                    insert_cols = ", ".join([f"[{c}]" for c in columns])
+                    insert_values = ", ".join([f"S.[{c}]" for c in columns])
+
+                    merge_sql = f"""
+                        MERGE dbo.{target_table} AS T
+                        USING (VALUES {', '.join(['(' + ', '.join(['?'] * len(columns)) + ')'] * len(records))})
+                            AS S ({quoted_cols})
+                        ON {on_clause}
+                        WHEN MATCHED THEN
+                            UPDATE SET {update_set}
+                        WHEN NOT MATCHED THEN
+                            INSERT ({insert_cols})
+                            VALUES ({insert_values});
+                    """
+
+                    # Flatten params
+                    params = []
+                    for rec in records:
+                        params.extend([rec[c] for c in columns])
+
+                    with pyodbc.connect(target_conn_str, autocommit=False) as target_conn:
+                        cur = target_conn.cursor()
+                        try:
+                            cur.execute(merge_sql, params)
+                            target_conn.commit()
+                        except Exception as e:
+                            target_conn.rollback()
+                            logger.error(f"❌ Merge failed for {target_table}: {e}")
+                            msg = f"❌ {target_table}: upsert failed for chunk"
+                            ti.xcom_push(key=f"{target_table}_load", value=msg)
+                            return msg
 
                 total_rows += len(chunk)
                 logger.info(f"📦 {target_table}: upserted {len(chunk)} rows (total {total_rows})")
-                first = False
 
         msg = f"✅ {target_table}: upserted table with {total_rows} rows"
         ti.xcom_push(key=f"{target_table}_load", value=msg)
@@ -462,4 +563,4 @@ def data_sync_mssql_to_postgres():
     tg >> end
 
 
-dag = data_sync_mssql_to_postgres()
+dag = data_sync_mssql_to_mssql()

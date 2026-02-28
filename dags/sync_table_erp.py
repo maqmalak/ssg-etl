@@ -33,7 +33,7 @@ DEFAULT_START = datetime(2025, 11, 1, 12, 10, tzinfo=PKT)
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
 INCLUDED_TABLES = ["DefDepartments", "DefDesignations"]
-CHUNK_SIZE = 10_000
+CHUNK_SIZE = 10000
 
 # ---------------------------------------------------------------- #
 # UTILITIES

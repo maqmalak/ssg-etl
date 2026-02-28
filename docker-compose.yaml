@@ -30,6 +30,9 @@ x-airflow-common: &airflow-common
     # Use Redis for rate limit storage instead of in-memory
     FLASK_LIMITER_STORAGE_URL: redis://:@redis:6379/0
 
+    # Kafka broker for containerized setup
+    KAFKA_BROKER: 'broker:29092'
+
     # Resource limits optimized for 24 cores and 64GB RAM
     # AIRFLOW__CORE__PARALLELISM: '32'
     # AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: '24'
@@ -383,6 +386,7 @@ services:
       - "8081:8081"  # Worker 1 UI
     environment:
       - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
@@ -421,6 +425,7 @@ services:
       - "8082:8081"  # Worker 2 UI
     environment:
       - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no

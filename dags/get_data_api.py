@@ -46,13 +46,13 @@ def stream_data():
     import os
 
     logging.basicConfig(level=logging.INFO)  # Ensure logging is configured
-    # kafka_broker = os.getenv('KAFKA_BROKER', 'broker:29092')  # Default to broker container for containerized setup
-    # try:
-    #     producer = KafkaProducer(bootstrap_servers=[kafka_broker], max_block_ms=10000)
-    #     logging.info(f"Connected to Kafka broker: {kafka_broker}")
-    # except Exception as e:
-    #     logging.error(f"Kafka broker not available at {kafka_broker}: {e}")
-    #     raise e
+    kafka_broker = os.getenv('KAFKA_BROKER', 'broker:29092')  # Default to broker container for containerized setup
+    try:
+        producer = KafkaProducer(bootstrap_servers=[kafka_broker], max_block_ms=10000)
+        logging.info(f"Connected to Kafka broker: {kafka_broker}")
+    except Exception as e:
+        logging.error(f"Kafka broker not available at {kafka_broker}: {e}")
+        raise e
 
     curr_time = time.time()
     while time.time() < curr_time + 60:  # Run for 1 minute
@@ -61,11 +61,11 @@ def stream_data():
             res = format_data(res)
             logging.info(f"Sending data: {res}")
             print(f'data: {res}')
-            # producer.send('users_created', json.dumps(res).encode('utf-8'))
+            producer.send('GET_DATA_API', json.dumps(res).encode('utf-8'))
             time.sleep(1)  # Add delay to avoid rapid API calls and overwhelming the system
         except Exception as e:
             logging.error(f'Error in loop: {e}')
-    # producer.flush()  # Ensure all messages are sent
+    producer.flush()  # Ensure all messages are sent
     logging.info("Data streaming completed.")
 
 with DAG('get_data_api',
@@ -79,6 +79,6 @@ with DAG('get_data_api',
         python_callable=stream_data
     )
 
-if __name__ == "__main__":
-    print("Running stream_data function for testing...")
-    stream_data()
+# if __name__ == "__main__":
+#     print("Running stream_data function for testing...")
+#     stream_data()

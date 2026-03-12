@@ -60,7 +60,7 @@ INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee"]  # ✅ sp
 TARGETS = [
     {"table": "ina_planinfo", "pk": ["id"]},
     {"table": "ina_operationinfo", "pk": ["id"]},
-    {"table": "ina_operationinfo", "pk": ["employeecode"]},
+    {"table": "ina_employee", "pk": ["id"]},
 
 
 ]

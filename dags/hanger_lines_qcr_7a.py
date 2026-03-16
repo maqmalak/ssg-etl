@@ -245,7 +245,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     THEN 'Day'
                 ELSE 'Night'
             END AS shift, 
-            pqtm_bsm_code_back AS qcr_from_qc_station, 
+            pqtm_bsm_code_back AS qc_station, 
             
             CASE
                 WHEN LEFT(pqtm.pqtm_bsm_code_back, 2) = '10' THEN 'line-30'
@@ -340,7 +340,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
                     "qcr_defect_oc_key": d.get("qcr_defect_oc_key"),  # String field, no sanitization needed
                     "oc_description": d.get("oc_description"),
                     "qcr_defect_quantity": sanitize_numeric(d.get("qcr_defect_quantity"), default_value=None, field_name="qcr_defect_quantity"),
-                    "qcr_from_qc_station": d.get("qcr_from_qc_station"),
+                    "qc_station": d.get("qc_station"),
                     "qcr_qc_datetime": d.get("qcr_qc_datetime"),
                     "em_repair_key": sanitize_numeric(d.get("qcr_repair_em_key"), default_value=None, field_name="qcr_repair_em_key"),
                     "em_repair_firstname": d.get("em_repair_firstname"),

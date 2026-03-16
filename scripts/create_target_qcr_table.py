@@ -23,7 +23,9 @@ class QualityControlRepair(Base):
     oc_description = Column(String(255))
     qcr_sent_to_rework_by_em_key = Column(Integer, nullable=True) # Made nullable for data quality
     qcr_defect_quantity = Column(Integer, nullable=True)         # Made nullable for data quality
-    qcr_from_qc_station = Column(String(50))
+    qc_station = Column(String(50))
+    defect_station = Column(String(50))
+    repair_station = Column(String(50))
     qcr_hm_id = Column(String(50))
     qcr_qc_datetime = Column(DateTime)
     qcr_repair_em_key = Column(Integer, nullable=True)           # Made nullable for invalid employee codes

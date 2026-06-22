@@ -52,7 +52,7 @@ from sqlalchemy import inspect
 
 MSSQL_SOURCE_CONN_ID = "db-erp"
 MSSQL_TARGET_CONN_ID = "SSG_INA"
-INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee"]  # ✅ specify views to sync (case-sensitive)
+INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee", "ina_operation7a"]  # ✅ specify views to sync (case-sensitive)
 
 
 
@@ -61,6 +61,7 @@ TARGETS = [
     {"table": "ina_planinfo", "pk": ["id"]},
     {"table": "ina_operationinfo", "pk": ["id"]},
     {"table": "ina_employee", "pk": ["id"]},
+    {"table": "ina_operation7a", "pk": ["id"]},
 
 
 ]
@@ -145,7 +146,7 @@ def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
 @dag(
     dag_id="loading_info_update_erp_to_ina_6r",
     default_args=default_args,
-    schedule='0,30 8-23 * * 1-6',  # Run every hour
+    schedule='5,25 8-23 * * 1-6',  # Run every hour
     tags=["Loading", "erptoina", "ssg", "sync"],
     max_active_runs=1,
 )

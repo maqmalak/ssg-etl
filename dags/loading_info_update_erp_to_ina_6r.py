@@ -52,7 +52,7 @@ from sqlalchemy import inspect
 
 MSSQL_SOURCE_CONN_ID = "db-erp"
 MSSQL_TARGET_CONN_ID = "SSG_INA"
-INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee", "ina_operation7a"]  # ✅ specify views to sync (case-sensitive)
+INCLUDED_VIEWS = ["ina_planinfo", "ina_operationinfo", "ina_employee", "ina_operationinfo7a"]  # ✅ specify views to sync (case-sensitive)
 
 
 
@@ -61,7 +61,7 @@ TARGETS = [
     {"table": "ina_planinfo", "pk": ["id"]},
     {"table": "ina_operationinfo", "pk": ["id"]},
     {"table": "ina_employee", "pk": ["id"]},
-    {"table": "ina_operation7a", "pk": ["id"]},
+    {"table": "ina_operationinfo7a", "pk": ["id"]},
 
 
 ]

@@ -508,6 +508,7 @@ def transform_data_single(spark: SparkSession, source_connection_params: dict, t
                 WHEN LEFT(odp.ppd_bls_code, 2) = '10' THEN 'line-30'::text
                 WHEN LEFT(odp.ppd_bls_code, 2) = '11' THEN 'line-21'::text
                 WHEN LEFT(odp.ppd_bls_code, 2) = '12' THEN 'line-32'::text
+                WHEN LEFT(odp.ppd_bls_code, 2) = '15' THEN 'line-40'::text
                 ELSE odp.ppd_bls_code::text
             END AS source_connection,
             ppd_start_time::timestamp AS odp_first_hanger_time,

@@ -262,7 +262,8 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
 
             Style_Master_1.ST_ID AS st_id,
             Style_Master_1.ST_Description AS st_description,
-            IHS.dbo.ODP_Detail.ODPD_Lot_Number AS odpd_lot_number,
+            /* # IHS.dbo.ODP_Detail.ODPD_Lot_Number AS odpd_lot_number, --*/
+            Style_Planned_Orders_1.STPO_ID AS odpd_lot_number,
 			
             Primary_Codes_1.PC_Description AS odpd_pc_description,
             Style_Master_1.ST_Collection AS odpd_st_collection,
@@ -272,7 +273,6 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             Style_Operations_1.STOP_Number AS odpd_stop_number,
             Operation_Codes_1.OC_Piece_Rate_Additional AS odpd_oc_piece_rate_additional,
 
-
             Style_Master_1.ST_Fabric AS odpd_st_fabric,
             IHS.dbo.ODP_Detail.ODPD_STPO_Key AS odpd_stpo_key,
             Style_Planned_Orders_1.STPO_ID AS ODPI_STPO_Number,
@@ -281,7 +281,7 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
             IHS.dbo.ODP_Detail.ODPD_Overtime_Factor AS odpd_overtime_factor,
             li.Line_Number AS odpd_line_number,
             IHS.dbo.ODP_Master.[modified_at] AS created_at,
-            null as fg_item_key ,
+            Style_Planned_Orders_1.STPO_CI_NAME as fg_item_key ,
             /*--- New Fields ---*/
             0 as efficiency,
             0 as ppd_tvwh

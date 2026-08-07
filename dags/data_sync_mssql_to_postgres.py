@@ -53,7 +53,7 @@ from sqlalchemy import inspect
 
 MSSQL_CONN_ID = "SilverStr"
 POSTGRES_CONN_ID = "pg-ssg"
-INCLUDED_VIEWS = ["clientpurchaseorder","loadinginformation","operationinformation","hangerline_emp","transfertopacking","v_attendance"]  # ✅ specify views to sync (case-sensitive)
+INCLUDED_VIEWS = ["clientpurchaseorder","loadinginformation","operationinformation","hangerline_emp","transfertopacking","v_attendance","ina_operation_list"]  # ✅ specify views to sync (case-sensitive)
 
 
 
@@ -65,6 +65,7 @@ TARGETS = [
     {"table": "hangerline_emp", "pk": ["id"]},
     {"table": "transfertopacking", "pk": ["id"]},
     {"table": "v_attendance", "pk": ["id"]},
+    {"table": "ina_operation_list", "pk": ["id"]}
 ]
 
 

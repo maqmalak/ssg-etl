@@ -891,7 +891,7 @@ def transform_data_chunked(spark: SparkSession, source_connection_params: dict, 
                     CASE WHEN odp.ppd_poi_name = 'Loading/Panel Segregation' THEN
                         odp.ppd_quantity::numeric ELSE 0
                     END AS loading_qty,
-                    CASE WHEN odp.ppd_poi_name = 'Garment Insert in Poly Bag & Close' THEN
+                    CASE WHEN odp.ppd_poi_name = 'Packing' THEN
                         odp.ppd_quantity::numeric ELSE 0
                     END AS unloading_qty,
                     odp.ppd_bls_code::text AS odpd_workstation,

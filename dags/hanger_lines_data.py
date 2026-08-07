@@ -241,8 +241,9 @@ def fetch_data_from_source(connection_id: str) -> Generator[List[Dict[str, Any]]
 
             CAST(IHS.dbo.ODP_Detail.ODPD_OC_Key AS CHAR) AS odpd_oc_key,
             Operation_Codes_1.OC_Description AS oc_description,
+            /*---Garment Insert in Poly Bag & Close---*/
             CASE WHEN [OC_Description] = 'Loading/Panel Segregation' THEN IHS.dbo.ODP_Detail.ODPD_Quantity ELSE 0 END AS loading_qty,
-            CASE WHEN [OC_Description] IN ('Garment Insert in Poly Bag & Close') THEN IHS.dbo.ODP_Detail.ODPD_Quantity ELSE 0 END AS unloading_qty,
+            CASE WHEN [OC_Description] IN ('Packing') THEN IHS.dbo.ODP_Detail.ODPD_Quantity ELSE 0 END AS unloading_qty,
             Colour_Master_1.CM_Short_Description AS cm_short_description,
             Size_Master_1.SM_Short_Description AS sm_short_description,
             IHS.dbo.ODP_Detail.ODPD_Standard AS oc_standard_time,

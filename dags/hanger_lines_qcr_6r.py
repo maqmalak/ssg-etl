@@ -151,7 +151,7 @@ def get_last_extract_dt_from_log(src: str) -> Optional[datetime]:
         create_qcr_table_if_not_exists(engine)
         with engine.connect() as conn:
             res = conn.execute(text("""
-                SELECT MAX(lastextractdatetime)
+                SELECT max(lastextractdatetime)::date
                 FROM etl_qcr_extract_log
                 WHERE status = 'Completed' AND source_connection=:s AND saved_count>0
             """), {"s": src}).scalar()

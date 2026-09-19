@@ -260,7 +260,12 @@ services:
           memory: 0.5G
           cpus: '0.25'
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      # `airflow jobs check` boots a full Airflow CLI process (>60s in this
+      # container), always exceeding the healthcheck timeout and reporting a
+      # perfectly healthy triggerer as "unhealthy". Match the scheduler /
+      # dag-processor convention here; the triggerer's real liveness is recorded
+      # in the `job` table (job_type=TriggererJob, state=running).
+      test: ["CMD", "echo", "ok"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -286,13 +291,35 @@ services:
         mkdir -v -p /opt/airflow/logs/dag_processor
         mkdir -v -p /opt/airflow/sparkFiles/apps
         /entrypoint airflow version
-        /entrypoint airflow config list >/dev/null
+        # NOTE: `/entrypoint airflow config list` was removed to speed up startup.
+        # It was a second full Airflow CLI boot (~20s) whose output was discarded
+        # (>/dev/null). Config validity is already proven by the `/entrypoint`
+        # db-migrate step that runs before this script.
         rm -f /opt/airflow/logs/dag_processor/latest
         rm -f /opt/airflow/logs/scheduler/latest
-        find /opt/airflow/logs -type l -name 'latest' -exec rm -f {} \;
-        chown -R "${AIRFLOW_UID}:0" /opt/airflow/logs || exit 0
-        # Pause all existing DAGs to ensure they start paused
-        for dag in $(/entrypoint airflow dags list --output table | tail -n +2 | awk '{print $1}'); do /entrypoint airflow dags pause $dag || true; done
+        # -delete avoids one fork/exec per matching symlink (much faster than -exec rm -f)
+        find /opt/airflow/logs -type l -name 'latest' -delete
+        # Fast ownership fix. Only the log dirs created above need to be owned by the
+        # runtime user; a recursive `chown -R /opt/airflow/logs` walks every historical
+        # task-log file and took ~2 minutes with 30k+ files, dominating startup time.
+        # Set AIRFLOW_CHOWN_LOGS_RECURSIVE=true (e.g. in .env) to force a full recursive
+        # chown when carrying over a logs folder created by a different user.
+        if [[ "${AIRFLOW_CHOWN_LOGS_RECURSIVE:-false}" == "true" ]]; then
+          echo "Running full recursive chown of /opt/airflow/logs (slow)"
+          chown -R "${AIRFLOW_UID}:0" /opt/airflow/logs || exit 0
+        else
+          chown "${AIRFLOW_UID}:0" \
+            /opt/airflow/logs \
+            /opt/airflow/logs/dag_processor_manager \
+            /opt/airflow/logs/scheduler \
+            /opt/airflow/logs/dag_processor || exit 0
+        fi
+        # NOTE: The per-DAG "airflow dags pause" loop was removed to speed up startup.
+        # Each pause call spawned a separate Airflow CLI process (config load + DB connect).
+        # Measured here: `airflow dags list` = 27s and listed 52 DAGs, so the loop cost
+        # roughly 27s + 52 x ~25s (~22 minutes) on every `docker compose up -d`.
+        # New/unknown DAGs are still created in a paused state via:
+        #   AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'

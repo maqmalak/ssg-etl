@@ -109,6 +109,91 @@ def build_mssql_conn_str(conn):
 
 
 
+def execute_merge_with_deadlock_retry(target_conn_str, merge_sql, params, target_table, max_retries=4):
+    """Execute a MERGE statement, automatically retrying on SQL Server deadlocks.
+
+    SQL Server error 1205 ("Transaction was deadlocked on lock resources ... and has
+    been chosen as the deadlock victim") is transient by design — Microsoft's official
+    guidance is simply to retry the transaction. This helper opens a fresh connection
+    for each attempt (a rolled-back/deadlocked connection shouldn't be reused) and
+    backs off with jitter between attempts.
+    """
+    attempt = 0
+    wait = 2
+    while True:
+        attempt += 1
+        with pyodbc.connect(target_conn_str, autocommit=False) as target_conn:
+            cur = target_conn.cursor()
+            try:
+                cur.execute(merge_sql, params)
+                target_conn.commit()
+                return None  # success
+            except Exception as e:
+                target_conn.rollback()
+                is_deadlock = '1205' in str(e) or 'deadlocked' in str(e).lower()
+                if is_deadlock and attempt < max_retries:
+                    logger.warning(
+                        f"⚠️ Deadlock detected on MERGE for {target_table} "
+                        f"(attempt {attempt}/{max_retries}); retrying in {wait:.1f}s"
+                    )
+                    time.sleep(wait + random.uniform(0, 1))
+                    wait *= 2
+                    continue
+                logger.error(f"❌ Merge failed for {target_table}: {e}")
+                return str(e)
+
+
+def widen_text_columns(target_conn_str: str, target_table: str, min_length: int = 500):
+    """Ensure NVARCHAR columns on an existing target table are at least `min_length`
+    characters wide (or already MAX). This guards against 'String or binary data
+    would be truncated' errors when upstream source columns grow, since the ETL only
+    creates the table schema once and never widens it automatically otherwise.
+    """
+    try:
+        with pyodbc.connect(target_conn_str, autocommit=True) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT c.name AS column_name, t.name AS type_name, c.max_length
+                FROM sys.columns c
+                JOIN sys.types t ON c.user_type_id = t.user_type_id
+                WHERE c.object_id = OBJECT_ID(?)
+                  AND t.name IN ('nvarchar', 'varchar')
+                """,
+                (f"dbo.{target_table}",),
+            )
+            columns = cur.fetchall()
+
+            for col_name, type_name, max_length in columns:
+                # Skip the primary key column; altering it can hit index size limits
+                # and it isn't the source of truncation errors in practice.
+                if col_name.lower() == 'id':
+                    continue
+                # NVARCHAR max_length is stored in bytes (2 bytes/char); -1 means MAX
+                if max_length == -1:
+                    continue
+                current_chars = max_length // 2 if type_name == 'nvarchar' else max_length
+                if current_chars < min_length:
+                    try:
+                        alter_sql = (
+                            f"ALTER TABLE dbo.{target_table} "
+                            f"ALTER COLUMN [{col_name}] {type_name.upper()}({min_length})"
+                        )
+                        cur.execute(alter_sql)
+                        logger.info(
+                            f" Widened column [{col_name}] on dbo.{target_table} "
+                            f"from {type_name}({current_chars}) to {type_name}({min_length})"
+                        )
+                    except Exception as alter_err:
+                        # Non-fatal: log and continue; the merge may still fail later
+                        # for this specific column if truncation persists.
+                        logger.warning(
+                            f"⚠️ Could not widen column [{col_name}] on dbo.{target_table}: {alter_err}"
+                        )
+    except Exception as e:
+        logger.warning(f"⚠️ Could not inspect/widen columns for dbo.{target_table}: {e}")
+
+
 def infer_column_types(df: pd.DataFrame) -> pd.DataFrame:
     """Auto-cast numeric and datetime columns for cleaner MSSQL schema."""
     for col in df.columns:
@@ -275,7 +360,14 @@ def data_sync_mssql_to_mssql():
             cur.execute("SELECT 1 FROM sys.tables WHERE name = ? AND schema_id = SCHEMA_ID('dbo')", (target_table,))
             target_table_exists = cur.fetchone() is not None
 
-        logger.info(f"🚀 Starting upsert for table: {target_table}")
+        # ✅ If the target table already exists, make sure its NVARCHAR columns are wide
+        # enough to hold incoming string data. Existing tables (created previously, or
+        # with a legacy/narrower schema) can otherwise throw "String or binary data would
+        # be truncated" errors when upstream values grow longer than the current column size.
+        if target_table_exists:
+            widen_text_columns(target_conn_str, target_table)
+
+        logger.info(f" Starting upsert for table: {target_table}")
 
         with pyodbc.connect(source_conn_str) as mssql_conn:
             qualified_table_name = f"dbo.{table_name}"
@@ -296,6 +388,20 @@ def data_sync_mssql_to_mssql():
             # Infer types
             first_chunk = infer_column_types(first_chunk)
 
+            # ✅ Primary key columns are stored as NVARCHAR in the target table and must
+            # be compared/inserted as exact strings. If infer_column_types() (or later
+            # numeric coercion) turns a purely-numeric-looking id like
+            # '738490005000010' into int64/float64, a large ID can lose precision or be
+            # reformatted (e.g. via float64, which only safely represents ~15-16 sig.
+            # digits), producing a *different* string than what's already stored in the
+            # target. MERGE's ON T.id = S.id then fails to match the existing row and
+            # attempts an INSERT, causing a "Violation of PRIMARY KEY constraint" error
+            # even though the row already exists. Force PK columns to remain strings.
+            if pk:
+                for k in pk:
+                    if k in first_chunk.columns:
+                        first_chunk[k] = first_chunk[k].apply(lambda x: None if pd.isna(x) else str(x))
+
             # Store dtypes for consistent type conversion
             dtypes = first_chunk.dtypes.copy()
 
@@ -311,11 +417,11 @@ def data_sync_mssql_to_mssql():
                     elif dtype == 'float64':
                         sql_type = 'FLOAT'
                     elif dtype == 'object':
-                        sql_type = 'NVARCHAR(255)'
+                        sql_type = 'NVARCHAR(500)'
                     elif pd.api.types.is_datetime64_any_dtype(first_chunk[col]):
                         sql_type = 'DATETIME'
                     else:
-                        sql_type = 'NVARCHAR(255)'
+                        sql_type = 'NVARCHAR(500)'
                     create_sql += f"[{col}] {sql_type}, "
                 create_sql = create_sql.rstrip(', ') + ")"
 
@@ -342,8 +448,22 @@ def data_sync_mssql_to_mssql():
                     continue
                 records.append(record)
 
-            # Upsert the records
+            # ✅ Deduplicate records by primary key within this chunk (see comment on the
+            # subsequent chunks loop for why this is necessary to avoid PK violations
+            # inside a single MERGE statement).
             if pk:
+                deduped = {}
+                for record in records:
+                    key = tuple(record.get(k) for k in pk)
+                    deduped[key] = record
+                # ✅ Sort by PK before upserting. When multiple concurrent processes
+                # (parallel task retries, overlapping runs, etc.) MERGE into the same
+                # table, acquiring row locks in a consistent order reduces the chance
+                # of a deadlock (error 1205) versus an unordered/arbitrary sequence.
+                records = [deduped[k] for k in sorted(deduped.keys(), key=lambda t: [str(x) for x in t])]
+
+            # Upsert the records
+            if pk and records:
                 columns = list(records[0].keys())
                 quoted_cols = ", ".join([f"[{c}]" for c in columns])
                 pk_cols = ", ".join([f"T.[{k}]" for k in pk])
@@ -369,17 +489,13 @@ def data_sync_mssql_to_mssql():
                 for rec in records:
                     params.extend([rec[c] for c in columns])
 
-                with pyodbc.connect(target_conn_str, autocommit=False) as target_conn:
-                    cur = target_conn.cursor()
-                    try:
-                        cur.execute(merge_sql, params)
-                        target_conn.commit()
-                    except Exception as e:
-                        target_conn.rollback()
-                        logger.error(f"❌ Merge failed for {target_table}: {e}")
-                        msg = f"❌ {target_table}: upsert failed for first chunk"
-                        ti.xcom_push(key=f"{target_table}_load", value=msg)
-                        return msg
+                merge_error = execute_merge_with_deadlock_retry(
+                    target_conn_str, merge_sql, params, target_table
+                )
+                if merge_error:
+                    msg = f"❌ {target_table}: upsert failed for first chunk"
+                    ti.xcom_push(key=f"{target_table}_load", value=msg)
+                    return msg
 
             total_rows += len(first_chunk)
 
@@ -394,11 +510,27 @@ def data_sync_mssql_to_mssql():
                 # ✅ Infer data types
                 chunk = infer_column_types(chunk)
 
+                # ✅ Force PK columns to remain strings (see explanation above where the
+                # same is done for the first chunk) so MERGE matches existing rows
+                # correctly instead of attempting duplicate INSERTs.
+                if pk:
+                    for k in pk:
+                        if k in chunk.columns:
+                            chunk[k] = chunk[k].apply(lambda x: None if pd.isna(x) else str(x))
+
                 # ✅ Apply consistent types based on first chunk
                 for col in chunk.columns:
                     if col in dtypes:
                         if dtypes[col] == 'int64' or str(dtypes[col]) == 'Int64':
-                            chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('Int64')
+                            numeric_col = pd.to_numeric(chunk[col], errors='coerce')
+                            # ✅ Guard against non-integer values (e.g. 1.5) that can't be
+                            # safely cast to Int64. If any fractional values are present,
+                            # fall back to float64 instead of raising a TypeError.
+                            non_null = numeric_col.dropna()
+                            if not non_null.empty and (non_null % 1 != 0).any():
+                                chunk[col] = numeric_col.astype('float64')
+                            else:
+                                chunk[col] = numeric_col.astype('Int64')
                         elif dtypes[col] == 'float64':
                             chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('float64')
                         elif pd.api.types.is_datetime64_any_dtype(dtypes[col]):
@@ -425,8 +557,23 @@ def data_sync_mssql_to_mssql():
                         continue
                     records.append(record)
 
-                # Upsert the chunk using MSSQL MERGE
+                # ✅ Deduplicate records by primary key within this chunk. MERGE's USING
+                # (VALUES ...) source is evaluated against the target as of statement
+                # start, so if the same PK appears more than once in the source (and it
+                # doesn't yet exist in the target), MERGE will try to INSERT it more than
+                # once, causing a "Violation of PRIMARY KEY constraint" error. Keep the
+                # last occurrence (most recent value) for each PK.
                 if pk:
+                    deduped = {}
+                    for record in records:
+                        key = tuple(record.get(k) for k in pk)
+                        deduped[key] = record
+                    # ✅ Sort by PK before upserting to reduce deadlock likelihood (see
+                    # comment on the first-chunk block for details).
+                    records = [deduped[k] for k in sorted(deduped.keys(), key=lambda t: [str(x) for x in t])]
+
+                # Upsert the chunk using MSSQL MERGE
+                if pk and records:
                     columns = list(records[0].keys())
                     quoted_cols = ", ".join([f"[{c}]" for c in columns])
                     pk_cols = ", ".join([f"T.[{k}]" for k in pk])
@@ -452,20 +599,16 @@ def data_sync_mssql_to_mssql():
                     for rec in records:
                         params.extend([rec[c] for c in columns])
 
-                    with pyodbc.connect(target_conn_str, autocommit=False) as target_conn:
-                        cur = target_conn.cursor()
-                        try:
-                            cur.execute(merge_sql, params)
-                            target_conn.commit()
-                        except Exception as e:
-                            target_conn.rollback()
-                            logger.error(f"❌ Merge failed for {target_table}: {e}")
-                            msg = f"❌ {target_table}: upsert failed for chunk"
-                            ti.xcom_push(key=f"{target_table}_load", value=msg)
-                            return msg
+                    merge_error = execute_merge_with_deadlock_retry(
+                        target_conn_str, merge_sql, params, target_table
+                    )
+                    if merge_error:
+                        msg = f"❌ {target_table}: upsert failed for chunk"
+                        ti.xcom_push(key=f"{target_table}_load", value=msg)
+                        return msg
 
                 total_rows += len(chunk)
-                logger.info(f"📦 {target_table}: upserted {len(chunk)} rows (total {total_rows})")
+                logger.info(f" {target_table}: upserted {len(chunk)} rows (total {total_rows})")
 
         msg = f"✅ {target_table}: upserted table with {total_rows} rows"
         ti.xcom_push(key=f"{target_table}_load", value=msg)
@@ -486,7 +629,7 @@ def data_sync_mssql_to_mssql():
         separator = "─" * 80
 
         logger.info("\n" + separator)
-        logger.info("📊 FINAL DATA SYNC SUMMARY")
+        logger.info(" FINAL DATA SYNC SUMMARY")
         logger.info(separator)
 
         if not tables:

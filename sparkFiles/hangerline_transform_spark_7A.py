@@ -497,7 +497,7 @@ def transform_data_single(spark: SparkSession, source_connection_params: dict, t
         SELECT
             odp.ppd_key::text AS odpd_key,
             odp.ppd_hei_key::text AS odp_key,
-            /*----left 13 characters of ppd_hei_code are numeric, else NULL----*/
+            /*----left 13 characters of ppd_hei_code are numeric, else NULL--changes--*/
             CASE
                 WHEN odp.ppd_hei_code ~ '^[0-9]+$' THEN LEFT(odp.ppd_hei_code, 11)::int
                 ELSE NULL
